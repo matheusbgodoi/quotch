@@ -1,0 +1,12 @@
+.build/
+build/
+*.app/
+.DS_Store
+dist/
+docs/dissecacao/
+docs/auditoria/
+docs/spec.md
+docs/backlog.md
+docs/requisitos.md
+docs/browser-cookies-investigacao.md
+docs/browser-flow-antigravity.md
