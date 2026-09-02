@@ -607,6 +607,9 @@ enum Providers {
 /// Agenda as leituras: no launch, a cada 300 s, ao acordar e no clique.
 @MainActor
 final class RefreshCoordinator {
+    /// Última leitura por automação NESTA execução (não vem do cache em disco).
+    static var lastAutomationRead: [UUID: Date] = [:]
+
     private let model: NotchModel
     private let store: ConfigStore
     private var timer: Timer?
@@ -641,7 +644,7 @@ final class RefreshCoordinator {
             QTLog.write("refreshAll slot \(slot.kind) cp=\(slot.chromeProfile ?? "nil")")
             // Fontes por automação de navegador abrem uma aba: no ciclo automático, no máximo a cada 15 min.
             if BrowserSource.parse(slot.chromeProfile) != nil || slot.kind == .flow,
-               let last = model.readings[slot.id]?.fetchedAt, Date().timeIntervalSince(last) < 900 { continue }
+               let last = RefreshCoordinator.lastAutomationRead[slot.id], Date().timeIntervalSince(last) < 900 { continue }
             if slot.chromeProfile != nil { refresh(slot); continue }   // navegador/web: sempre
             if vault[slot.id] != nil { refresh(slot); continue }
             if !seen.contains(slot.kind) { seen.insert(slot.kind); refresh(slot) }
@@ -695,6 +698,7 @@ final class RefreshCoordinator {
                 }
                 if slot.chromeProfile == nil, Vault.load()[slot.id] != nil, slot.kind != .codex { Vault.storeReading(r, for: slot.id) }
                 model.readings[slot.id] = r
+                RefreshCoordinator.lastAutomationRead[slot.id] = Date()
                 withAnimation(NQMotion.value) { model.setState(slot.id, .reading(fraction: r.fraction, weekly: r.inner)) }
                 model.refreshToken[slot.id, default: 0] += 1
                 failures[slot.id] = 0; retryNotBefore[slot.id] = nil
