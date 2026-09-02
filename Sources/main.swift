@@ -27,6 +27,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self.model.applyVisibility(self.store.config.notchVisibility)
         }
 
+        // NotchConfigBridge.init() já chama apply(store.config) na última linha — antes que
+        // possamos ligar onSlotCountChange logo abaixo. Essa primeira aplicação (a que troca
+        // o modelo de demonstração pela config real do usuário) não dispara scheduleRelayout,
+        // então a janela fica do tamanho do mock (5 provedores) até outro evento reajustar.
+        // Com 6+ provedores isso cortava o último anel (visível só depois do Grokbot).
+        // Corrige forçando um relayout já com os closures ligados.
         let b = NotchConfigBridge(store: store, model: model)
         b.onSlotCountChange = { [weak self] in self?.controller?.scheduleRelayout() }
         b.onLayoutChange = { [weak self] edge, vis in
@@ -36,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if self.model.visibility != vis { self.model.applyVisibility(vis) }
         }
         bridge = b
+        controller?.scheduleRelayout()
         if !QuotchDemo { coordinator = RefreshCoordinator(model: model, store: store) }
         controller?.coordinator = coordinator
 
