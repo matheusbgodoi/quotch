@@ -4,6 +4,12 @@
 
 <p align="center"><img src="docs/screenshots/quotch-demo.gif" width="760" alt="Closed, hovering to open, flipping an account stack, the settings button"></p>
 
+## Install
+1. Download `Quotch.dmg` from [Releases](../../releases/latest), open it, and drag **Quotch** onto **Applications**.
+2. **First launch only** — the release isn't notarised by Apple, so Gatekeeper blocks a plain double-click the first time. Instead: **Control-click (or right-click) Quotch in Applications → Open → Open** in the dialog that appears. If macOS shows no "Open" button at all, go to **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to Quotch. You only do this once — every launch after that works normally.
+3. Quotch lives outside the Dock. Look for a thin black strip at the edge of your screen, or reopen it from Applications to bring up Settings.
+4. Add an account from **Settings → +** for each provider. Browser-based providers (Claude, Cursor, Grokbot, Flow) ask for **Full Disk Access** once — Settings tells you exactly when and shows a button straight to the right pane. Grant it, reopen Quotch, and every browser account you add from then on reads silently.
+
 ## What it does
 A thin black strip hugs the edge of your screen. Hover it and it opens into rings — one per AI provider — with the
 percentage of your quota used. **Providers with more than one account show as a stack of cards**: scroll over the
@@ -59,6 +65,8 @@ Quotch reads a provider straight from the browser where you are already signed i
 3. Reopen Quotch.
 
 Chrome profiles are read per profile (Pedro, Letícia, …). Safari is read from its cookie store. No Automation permission, no tabs, no windows.
+
+**A second, separate prompt for Chrome only:** the first time Quotch reads a Chrome profile, macOS asks *"Quotch wants to access the key 'Chrome Safe Storage' in your keychain"* — that's the login keychain password, and it's how Chrome itself encrypts your cookies. Choose **Always Allow** so it only asks once. This is unrelated to your Chrome password or your Google account; Quotch never sees either.
 
 Sources that read from the desktop tool instead of a browser need no Full Disk Access: **Claude Code** (Keychain login), **Codex** (local CLI files), **Antigravity** (a local bridge to the running app).
 

@@ -42,7 +42,7 @@ struct Glyph: View {
             case .flow:
                 FlowGlyph().fill(color)
             case .grok:
-                GrokGlyph().fill(color)
+                GrokGlyph().fill(color, style: FillStyle(eoFill: true))
             }
         }
         .frame(width: box.width, height: box.height)
@@ -270,63 +270,33 @@ struct FlowGlyph: Shape {
     }
 }
 
-// MARK: - Grok (x.ai)
-//
-// Marca oficial do Grok (traço do favicon de grok.com, viewBox 512). Parser próprio
-// (M/L/C/V absolutos); normaliza pela bounding box da marca para preencher a caixa.
-struct GrokGlyph: Shape {
-    static let data =
-    "M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"
 
-    /// Path unitário (0…1), já centrado pela própria bounding box.
-    static let unitPath: Path = {
-        // 1) parse em pontos absolutos (espaço 512).
-        var pts: [(op: Character, c: [CGPoint])] = []
-        var nums: [CGFloat] = []; var op: Character = "M"; var cur = CGPoint.zero
-        var token = ""
-        func numsToPoints() -> [CGPoint] { stride(from: 0, to: nums.count - 1, by: 2).map { CGPoint(x: nums[$0], y: nums[$0+1]) } }
-        func flush() {
-            guard !nums.isEmpty else { return }   // ignora o flush inicial (sem números)
-            switch op {
-            case "M", "L": let ps = numsToPoints(); if let last = ps.last { cur = last }; pts.append((op, ps))
-            case "C": let ps = numsToPoints(); if let last = ps.last { cur = last }; pts.append((op, ps))
-            case "V": if let y = nums.first { cur = CGPoint(x: cur.x, y: y); pts.append(("L", [cur])) }
-            case "H": if let x = nums.first { cur = CGPoint(x: x, y: cur.y); pts.append(("L", [cur])) }
-            default: break
-            }
-            nums.removeAll(keepingCapacity: true)
-        }
-        func pushToken() { if !token.isEmpty, let v = Double(token) { nums.append(CGFloat(v)) }; token = "" }
-        for ch in data {
-            if "MLCVHZ".contains(ch) { pushToken(); flush(); op = ch }
-            else if ch == " " || ch == "," { pushToken() }
-            else if ch == "-" { pushToken(); token = "-" }
-            else { token.append(ch) }
-        }
-        pushToken(); flush()
-        // 2) bounding box de todos os pontos.
-        let all = pts.flatMap { $0.c }
-        let minX = all.map(\.x).min() ?? 0, maxX = all.map(\.x).max() ?? 1
-        let minY = all.map(\.y).min() ?? 0, maxY = all.map(\.y).max() ?? 1
-        let span = max(maxX - minX, maxY - minY)
-        let offX = (span - (maxX - minX)) / 2, offY = (span - (maxY - minY)) / 2
-        func n(_ p: CGPoint) -> CGPoint { CGPoint(x: (p.x - minX + offX) / span, y: (p.y - minY + offY) / span) }
-        // 3) monta o path unitário.
-        var path = Path()
-        for seg in pts {
-            switch seg.op {
-            case "M": path.move(to: n(seg.c[0]))
-            case "L": for p in seg.c { path.addLine(to: n(p)) }
-            case "C": var i = 0; while i + 2 < seg.c.count { path.addCurve(to: n(seg.c[i+2]), control1: n(seg.c[i]), control2: n(seg.c[i+1])); i += 3 }
-            default: break
-            }
-        }
-        return path
-    }()
+// MARK: - Grok Bot (mascote fantasma)
+//
+// Não é a marca da x.ai — é o ícone do app "Grok Bot" que o usuário tem instalado
+// (extraído do bundle: uma bola/cabeça redonda com dois olhos ovais inclinados,
+// tipo fantasma). Desenhado como bola cheia + dois olhos recortados (even-odd fill,
+// mesma técnica do CursorGlyph) para ler bem em branco sobre a notch preta.
+struct GrokGlyph: Shape {
+    private func eye(in box: CGRect, cx: CGFloat, cy: CGFloat, w: CGFloat, h: CGFloat, angleDeg: CGFloat) -> Path {
+        let side = min(box.width, box.height)
+        let ew = side * w, eh = side * h
+        var ep = Path(ellipseIn: CGRect(x: -ew/2, y: -eh/2, width: ew, height: eh))
+        let center = CGPoint(x: box.minX + side * cx, y: box.minY + side * cy)
+        let t = CGAffineTransform(rotationAngle: angleDeg * .pi / 180)
+            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
+        ep = ep.applying(t)
+        return ep
+    }
 
     func path(in rect: CGRect) -> Path {
         let side = min(rect.width, rect.height)
-        let t = CGAffineTransform(translationX: rect.midX - side/2, y: rect.midY - side/2)
-        return Self.unitPath.applying(CGAffineTransform(scaleX: side, y: side).concatenating(t))
+        let c = CGPoint(x: rect.midX, y: rect.midY)
+        var p = Path()
+        let r = side * 0.47
+        p.addEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: r * 2, height: r * 2))
+        p.addPath(eye(in: rect, cx: 0.40, cy: 0.53, w: 0.135, h: 0.34, angleDeg: -20))
+        p.addPath(eye(in: rect, cx: 0.615, cy: 0.465, w: 0.135, h: 0.34, angleDeg: -20))
+        return p
     }
 }
