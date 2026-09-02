@@ -1,36 +1,47 @@
 # Quotch — estado
 
-## Arquitetura de conexão (refeita do zero)
-Contas de navegador conectam por **LOGIN DENTRO DO APP** (WKWebView, sessão isolada por conta) — não lê
-o Chrome/Safari de fora, não precisa de Full Disk Access, não usa Keychain de terceiro. Leitura por
-fetch same-origin na própria página. É o modelo whitelabel: qualquer um clica "Sign in", loga, pronto.
+## Arquitetura de conexão (atual)
+Contas de navegador são lidas **em segundo plano, sem abrir nada na tela**:
+Quotch lê o cookie de sessão que o próprio navegador já guarda, monta o header e chama a
+API de uso do provedor por HTTPS (URLSession). Nenhuma aba, nenhuma janela, nenhum AppleScript.
 
-## Por provedor (no "+")
-- Claude: "Sign in with Claude…" (login no app) · ou "From the signed-in Claude Code" (Keychain).
-- Cursor: "Sign in with Cursor…" · ou "From the Cursor app" (state.vscdb, já lê).
-- Flow:   "Sign in with Flow…" (login no app).
-- Codex:  "Codex (from the CLI)" — o site do ChatGPT não expõe cota; só o CLI tem.
-- Antigravity: "Antigravity (from the app)" (token do Keychain do app dele).
+- **Full Disk Access** é obrigatório uma vez: o macOS guarda os cookies de todo navegador numa
+  pasta protegida. Concedido uma vez, todas as contas de navegador (todos os provedores e perfis)
+  passam a ler silenciosamente. O app detecta FDA por `BrowserAccess.hasFullDiskAccess()` e, sem ele,
+  mostra um aviso no seletor de contas com botão que abre o painel.
+- **Assinatura estável**: `build.sh` assina com a identidade `Evie Dev` (ou `$QUOTCH_SIGN_ID`).
+  O TCC ancora o FDA na identidade, não no cdhash, então a concessão sobrevive a rebuilds/updates.
+  Sem identidade, cai para ad-hoc (aí o FDA não persiste entre builds).
+- `build-dmg.sh` empacota o app já instalado (não recompila, pra não trocar assinatura).
 
-## Conexão pelo NAVEGADOR do usuário (automação, como o Codenotch NÃO faz)
-- Flow: Safari → sessão (labs.google/fx/api/auth/session) → /v1/credits com Referer. ✅ 1050/1050.
-- Cursor: Safari → cursor.com/api/usage-summary (aba com nonce). ✅
-- Claude por PERFIL do Chrome: abre claude.ai no `--profile-directory` do perfil, acha a aba por nonce,
-  roda JS (usage + bootstrap). Requer no Chrome: Visualização › Desenvolvedor › "Permitir o JavaScript
-  do Eventos da Apple" (pref `AllowJavascriptAppleEvents`; vale na próxima abertura ou ao clicar).
-- Safari requer: Desenvolvedor › "Permitir JavaScript de Eventos da Apple". macOS pede "Automação" na 1ª vez.
-- Codex: ChatGPT web NÃO tem cota (3ª verificação: só `is_usage_based_seat_enabled`). Fica no CLI.
-- Automação serializada (1 por vez) e no ciclo automático no máximo a cada 15 min por conta.
+## Fontes por provedor
+| Provedor | Anéis | Fonte |
+|---|---|---|
+| Claude | sessão + semanal | cookie `sessionKey` do Chrome (por perfil) ou Safari → `claude.ai/api/…/usage`; ou Keychain do Claude Code |
+| Codex | limite semanal | arquivos locais do CLI (`~/.codex`) — sem rede |
+| Cursor | Cursor Models + Other Models | cookie `WorkosCursorSessionToken` → `cursor.com/api/usage-summary` (`autoPercentUsed`/`apiPercentUsed`) |
+| Grokbot | grok-4 + grok-3 (diário) | cookies `sso`/`sso-rw` → `POST grok.com/rest/rate-limits` |
+| Antigravity | cota diária | ponte local no app em execução (csrf + porta via lsof) |
+| Flow | créditos | cookies do Safari (`labs.google`) → sessão → `aisandbox-pa.googleapis.com/v1/credits` |
 
-## Feito
-- [x] Claude por perfil do Chrome VERIFICADO no app (Pedro 61%, Letícia 2%, com nome/e-mail). Flow e Cursor via Safari OK.
-- [x] Anel semanal: kinds reais são session/weekly_all/weekly_scoped.
-- [x] Seletor lista todos os perfis; app grava AllowJavascriptAppleEvents ao adicionar conta do Chrome.
+## Interação
+- Trocar de conta numa pilha: **scroll**. Usa o eixo dominante — vertical (wheel comum / 2 dedos)
+  ou **horizontal** (thumbwheel lateral do MX Master, swipe lateral no trackpad). Direita/baixo = próxima.
+- Sensibilidade: acumula o gesto; troca só a cada ~140 pt percorridos e no máximo 1 a cada 0,5 s
+  (`handleScroll` em `NotchPanel.swift`) — evita troca acidental com o thumbwheel.
+
+## Feito (verificado no app, com FDA ligado)
+- [x] FDA funcionando e persistente entre rebuilds (assinatura Evie Dev). `hasFDA()=true`, tudo READ-OK.
+- [x] Leitura em segundo plano, SEM abrir aba/janela (confirmado: nenhum `osascript`).
+- [x] Claude Pedro (Chrome Profile 1) e Letícia (Chrome Profile 2) — sessão + semanal, com nome/e-mail.
+- [x] Cursor com DOIS anéis: Cursor Models (auto) + Other Models (api).
+- [x] Grokbot: provedor novo, logo próprio, registrável pelo seletor; lê grok-4/grok-3 por dia.
+- [x] Codex 23% (CLI). 
+- [x] Parser do `Cookies.binarycookies` do Safari reescrito, com verificação de limites (não crasha mais).
 - [x] Cotas honestas: sem número falso; "—" até ler de verdade.
-- [x] DOIS anéis: externo = janela curta (sessão/diário), interno = semanal (Claude/Codex).
-- [x] WebSession reescrita (login no app) para Claude/Cursor/Flow, sessão persistente por conta.
-- [x] Config do usuário: Claude Pedro(web), Claude Letícia(web), Codex Pedro(CLI), Cursor(app), Antigravity(Keychain), Flow(web).
 
-## Pendente
-- [ ] Verificar leitura logada de ponta a ponta (precisa do login do usuário no app).
-- [ ] Onboarding de 1ª vez explicando o login por conta.
+## Pendente / notas
+- [ ] Antigravity: a ponte local responde 200 só com o app Antigravity aberto; fechado, cai p/ nuvem (401) e fica stale.
+- [ ] Identidade (nome/e-mail) do Grokbot e do Cursor via Safari é opcional; hoje mostra o nome do provedor.
+- [ ] Onboarding de 1ª vez explicando o passo único do Full Disk Access.
+- [ ] Distribuição: build assinado com Evie Dev não é notarizado; em outra máquina, abrir com clique-direito › Abrir.

@@ -87,6 +87,7 @@ final class NotchConfigBridge {
         case .codex:       return .stale(fraction: 0.82)
         case .antigravity: return .noData
         case .flow:        return .reading(fraction: 0.64)
+        case .grok:        return .reading(fraction: 0.1)
         }
     }
 }

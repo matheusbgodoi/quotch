@@ -17,6 +17,7 @@ enum IdentityProbe {
         case .cursor: return cursor()
         case .antigravity: return antigravity()
         case .flow: return nil
+        case .grok: return nil
         }
     }
 

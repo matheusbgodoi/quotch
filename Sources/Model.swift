@@ -3,7 +3,7 @@ import SwiftUI
 let QuotchDemo = FileManager.default.fileExists(atPath: "/tmp/quotch-demo")
 
 enum ProviderKind: String, Codable, CaseIterable, Identifiable {
-    case claude, codex, cursor, antigravity, flow
+    case claude, codex, cursor, antigravity, flow, grok
     var id: String { rawValue }
     var category: ProviderCategory { self == .flow ? .generation : .coding }
     var displayName: String {
@@ -13,6 +13,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable {
         case .cursor: return "Cursor"
         case .antigravity: return "Antigravity"
         case .flow: return "Flow"
+        case .grok: return "Grokbot"
         }
     }
     /// Site aberto ao clicar. Passa pelo Escolher Navegador (esquema abrir://),
@@ -24,6 +25,7 @@ enum ProviderKind: String, Codable, CaseIterable, Identifiable {
         case .cursor: return URL(string: "https://cursor.com/dashboard")!
         case .antigravity: return URL(string: "https://antigravity.google")!
         case .flow: return URL(string: "https://labs.google/fx/tools/flow")!
+        case .grok: return URL(string: "https://grok.com")!
         }
     }
 }

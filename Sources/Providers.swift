@@ -43,7 +43,45 @@ enum Providers {
             if let r = try? await antigravityBridge() { return r }
             return try await antigravity()
         case .flow: throw ProviderError.noCredential
+        case .grok: throw ProviderError.noCredential   // só via navegador (cookie)
         }
+    }
+
+    // MARK: Grok — POST grok.com/rest/rate-limits com os cookies do navegador (sso/sso-rw).
+    // Anel de fora = grok-4 (o mais escasso), anel de dentro = grok-3. Reset diário.
+    static func grokBrowser(source: BrowserSource) async throws -> UsageReading {
+        let c = BrowserCookies.cookies(host: "grok.com", source: source)
+        guard c["sso"] != nil || c["sso-rw"] != nil else { throw ProviderError.noCredential }
+        let header = c.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
+        func rate(_ model: String) async -> (rem: Double, tot: Double, window: Double)? {
+            var req = URLRequest(url: URL(string: "https://grok.com/rest/rate-limits")!)
+            req.httpMethod = "POST"
+            req.setValue(header, forHTTPHeaderField: "Cookie")
+            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            req.setValue("https://grok.com", forHTTPHeaderField: "Origin")
+            req.setValue("https://grok.com/", forHTTPHeaderField: "Referer")
+            req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+            req.httpBody = try? JSONSerialization.data(withJSONObject: ["requestKind": "DEFAULT", "modelName": model])
+            req.timeoutInterval = 12
+            guard let (d, resp) = try? await URLSession.shared.data(for: req),
+                  (resp as? HTTPURLResponse)?.statusCode == 200,
+                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+                  let rem = (j["remainingQueries"] as? NSNumber)?.doubleValue,
+                  let tot = (j["totalQueries"] as? NSNumber)?.doubleValue else { return nil }
+            return (rem, tot, (j["windowSizeSeconds"] as? NSNumber)?.doubleValue ?? 86400)
+        }
+        guard let g4 = await rate("grok-4") else { throw ProviderError.badResponse("Grok: sessão expirada") }
+        func label(_ r: (rem: Double, tot: Double, window: Double), _ name: String) -> String {
+            "\(Int(r.rem))/\(Int(r.tot)) \(name)"
+        }
+        let outer = g4.tot > 0 ? max(0, (g4.tot - g4.rem) / g4.tot) : 0
+        var windows = [QuotaWindow(label: label(g4, "grok-4 today"), resetText: "", fraction: outer)]
+        var inner: Double? = nil
+        if let g3 = await rate("grok-3"), g3.tot > 0 {
+            inner = max(0, (g3.tot - g3.rem) / g3.tot)
+            windows.append(QuotaWindow(label: label(g3, "grok-3 today"), resetText: "", fraction: inner!))
+        }
+        return UsageReading(fraction: outer, inner: inner, windows: windows, fetchedAt: Date())
     }
 
     // MARK: Cursor — GET usage-summary com Cookie WorkosCursorSessionToken=<authId>%3A%3A<token>
@@ -61,9 +99,7 @@ enum Providers {
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw ProviderError.http((resp as? HTTPURLResponse)?.statusCode ?? 0) }
-        let iu = j["individualUsage"] as? [String: Any]; let plan = iu?["plan"] as? [String: Any]
-        let pct = (plan?["totalPercentUsed"] as? Double) ?? 0
-        return UsageReading(fraction: pct/100, windows: [QuotaWindow(label:"Included usage", resetText:"", fraction: pct/100)], fetchedAt: Date())
+        return parseCursorUsage(j)
     }
     static func claudeBrowserIdentity(source: BrowserSource) -> AccountIdentity? {
         guard let (header, org) = claudeCookieHeader(source) else { return nil }
@@ -357,12 +393,12 @@ enum Providers {
     static func browserIdentity(kind: ProviderKind, source: BrowserSource) async -> AccountIdentity? {
         let ck: String = { if case .chromium(let k, let p) = source { return "\(k):\(p)" }; return "safari" }()
         if let c = browserIdentityCache[ck] { return c }
-        if kind == .claude {
-            if case .chromium(_, let p) = source { _ = try? await claudeChrome(profileDir: p) } else { _ = try? await claudeSafari() }
-            if let c = browserIdentityCache[ck] { return c }
-        }
+        // Tudo por cookie + HTTP em segundo plano — nada abre na tela.
         switch kind {
-        case .claude: return claudeBrowserIdentity(source: source)
+        case .claude:
+            let id = claudeBrowserIdentity(source: source)
+            if let id { browserIdentityCache[ck] = id }
+            return id
         case .cursor:
             // e-mail do Cursor vem do próprio usage-summary quando presente.
             guard let full = BrowserCookies.cookies(host: "cursor.com", source: source)["WorkosCursorSessionToken"] else { return nil }
@@ -370,7 +406,13 @@ enum Providers {
             req.setValue("WorkosCursorSessionToken=\(full)", forHTTPHeaderField: "Cookie"); req.timeoutInterval = 15
             guard let (d, _) = try? await URLSession.shared.data(for: req),
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
-            return AccountIdentity(email: j["email"] as? String, name: nil, plan: (j["membershipType"] as? String)?.capitalized)
+            let id = AccountIdentity(email: j["email"] as? String, name: nil, plan: (j["membershipType"] as? String)?.capitalized)
+            browserIdentityCache[ck] = id
+            return id
+        case .flow:
+            let id = flowIdentity()
+            if let id { browserIdentityCache[ck] = id }
+            return id
         default: return nil
         }
     }
@@ -408,7 +450,7 @@ enum Providers {
     // Token cacheado até expirar → o Safari só é tocado ~1x/hora.
     private static var flowToken: (token: String, email: String?, name: String?, exp: Date)?
     static func flowSafari() async throws -> UsageReading {
-        let tok = try flowAccessToken()
+        let tok = try await flowAccessToken()
         var req = URLRequest(url: URL(string: "https://aisandbox-pa.googleapis.com/v1/credits")!)
         req.setValue("Bearer \(tok.token)", forHTTPHeaderField: "Authorization")
         req.setValue("https://labs.google/", forHTTPHeaderField: "Referer")
@@ -423,20 +465,42 @@ enum Providers {
         return UsageReading(fraction: used, windows: [w], fetchedAt: Date())
     }
     static func flowIdentity() -> AccountIdentity? {
-        guard let t = try? flowAccessToken() else { return nil }
+        guard let t = try? flowAccessTokenSync() else { return nil }
         return AccountIdentity(email: t.email, name: t.name, plan: "Flow")
     }
-    private static func flowAccessToken() throws -> (token: String, email: String?, name: String?, exp: Date) {
+    /// Token do Flow lido dos COOKIES do Safari (labs.google) via URLSession — não abre o Safari.
+    /// Requer Full Disk Access (o Safari guarda os cookies num container protegido pelo macOS).
+    private static func flowAccessToken() async throws -> (token: String, email: String?, name: String?, exp: Date) {
         if let c = flowToken, c.exp > Date().addingTimeInterval(60) { return c }
-        let out = safariJS(url: "https://labs.google/fx/api/auth/session", js: "window.__qt=document.body.innerText;'x'", settle: 4)
-        guard let d = out.data(using: .utf8),
+        let cookies = BrowserCookies.cookies(host: "labs.google", source: .safari)
+        guard !cookies.isEmpty else {
+            throw ProviderError.badResponse(BrowserAccess.hasFullDiskAccess() ? "Flow: entre no labs.google pelo Safari" : "Flow: precisa de Acesso Total ao Disco")
+        }
+        let header = cookies.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
+        var req = URLRequest(url: URL(string: "https://labs.google/fx/api/auth/session")!)
+        req.setValue(header, forHTTPHeaderField: "Cookie")
+        req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.timeoutInterval = 12
+        let (d, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-              let tok = j["access_token"] as? String, !tok.isEmpty else { throw ProviderError.badResponse("Flow: entre no Safari") }
+              let tok = j["access_token"] as? String, !tok.isEmpty else { throw ProviderError.badResponse("Flow: sessão expirada no Safari") }
         let user = j["user"] as? [String: Any]
         let exp = (j["expires"] as? String).flatMap { isoDate($0) } ?? Date().addingTimeInterval(3000)
         let c = (token: tok, email: user?["email"] as? String, name: user?["name"] as? String, exp: exp)
         flowToken = c
         return c
+    }
+    /// Versão síncrona (para identidade), reaproveita o cache e faz a leitura de cookie bloqueante.
+    private static func flowAccessTokenSync() throws -> (token: String, email: String?, name: String?, exp: Date) {
+        if let c = flowToken, c.exp > Date().addingTimeInterval(60) { return c }
+        let sem = DispatchSemaphore(value: 0)
+        var result: (token: String, email: String?, name: String?, exp: Date)?
+        Task { result = try? await flowAccessToken(); sem.signal() }
+        _ = sem.wait(timeout: .now() + 14)
+        guard let r = result else { throw ProviderError.badResponse("Flow: token indisponível") }
+        return r
     }
     /// Shell com argumentos (para osascript).
     static func shell(_ path: String, _ args: [String]) -> String {
@@ -446,138 +510,40 @@ enum Providers {
         return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
     }
 
-    // MARK: Automação do NAVEGADOR do usuário (já logado) — como o Flow via Safari.
-    // Chrome: abre a URL num PERFIL específico (--profile-directory), acha a aba por nonce,
-    // roda JS via Apple Events (precisa de "Permitir JavaScript de Eventos da Apple" no Chrome).
-    // Safari: "Permitir JavaScript de Eventos da Apple" no menu Desenvolvedor.
-    static let claudeUsageJS = "window.__qt='PENDING';(async()=>{try{let org=(document.cookie.match(/lastActiveOrg=([^;]+)/)||[])[1];const H={headers:{'anthropic-client-platform':'web_claude_ai'}};if(!org){const o=await (await fetch('/api/organizations',H)).json();org=o&&o[0]&&(o[0].uuid||o[0].id);}if(!org){window.__qt='NOORG';return;}const r=await fetch('/api/organizations/'+org+'/usage?source=web',H);if(r.status!==200){window.__qt='HTTP'+r.status;return;}const j=await r.json();try{const b=await (await fetch('/api/bootstrap',H)).json();const a=b.account||{};j.__email=a.email_address||a.email||null;j.__name=a.full_name||null;}catch(e){}window.__qt=JSON.stringify(j);}catch(e){window.__qt='ERR '+e}})();'started'"
     static var browserIdentityCache: [String: AccountIdentity] = [:]
-    /// Uma automação de navegador por vez (Safari/Chrome): evita duas abas disputando "front document".
-    static let automationLock = NSLock()
-
-    private static func tmpWrite(_ text: String, _ ext: String) -> String {
-        let p = FileManager.default.temporaryDirectory.appendingPathComponent("quotch-\(UUID().uuidString).\(ext)").path
-        try? text.write(toFile: p, atomically: true, encoding: .utf8); return p
-    }
-    /// Roda JS numa aba nova do Chrome no perfil dado; o JS deve escrever window.__qt ao terminar.
-    static func chromeJS(profile: String, url: String, js: String) -> String {
-        automationLock.lock(); defer { automationLock.unlock() }
-        let nonce = "qt-" + String(UUID().uuidString.prefix(8)).lowercased()
-        let p = Process(); p.launchPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        p.arguments = ["--profile-directory=\(profile)", url + "#" + nonce]
-        p.standardOutput = Pipe(); p.standardError = Pipe()
-        try? p.run()
-        Thread.sleep(forTimeInterval: 7)
-        let jsPath = tmpWrite(js, "js")
-        let script = """
-        set js to (read POSIX file "\(jsPath)" as «class utf8»)
-        tell application "Google Chrome"
-          set target to missing value
-          repeat with w in windows
-            repeat with t in tabs of w
-              if URL of t contains "\(nonce)" then set target to t
-            end repeat
-          end repeat
-          if target is missing value then return "NO_TAB"
-          try
-            execute target javascript js
-          on error e
-            close target
-            return "JS_ERR: " & e
-          end try
-          repeat 25 times
-            delay 1
-            set v to execute target javascript "window.__qt"
-            if v is not "PENDING" then
-              close target
-              return v
-            end if
-          end repeat
-          close target
-          return "TIMEOUT"
-        end tell
-        """
-        let asPath = tmpWrite(script, "applescript")
-        defer { try? FileManager.default.removeItem(atPath: jsPath); try? FileManager.default.removeItem(atPath: asPath) }
-        return shell("/usr/bin/osascript", [asPath]).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-    /// Roda JS numa aba nova do Safari; o JS deve escrever window.__qt.
-    static func safariJS(url: String, js: String, settle: Double = 6) -> String {
-        automationLock.lock(); defer { automationLock.unlock() }
-        let nonce = "qt-" + String(UUID().uuidString.prefix(8)).lowercased()
-        let jsPath = tmpWrite(js, "js")
-        let script = """
-        set js to (read POSIX file "\(jsPath)" as «class utf8»)
-        tell application "Safari"
-          make new document with properties {URL:"\(url)#\(nonce)"}
-          delay \(settle)
-          set target to missing value
-          repeat with w in windows
-            repeat with t in tabs of w
-              if URL of t contains "\(nonce)" then set target to t
-            end repeat
-          end repeat
-          if target is missing value then return "NO_TAB"
-          do JavaScript js in target
-          set v to "PENDING"
-          repeat 25 times
-            delay 1
-            set v to do JavaScript "window.__qt" in target
-            if v is not "PENDING" then exit repeat
-          end repeat
-          close target
-          return v
-        end tell
-        """
-        let asPath = tmpWrite(script, "applescript")
-        defer { try? FileManager.default.removeItem(atPath: jsPath); try? FileManager.default.removeItem(atPath: asPath) }
-        return shell("/usr/bin/osascript", [asPath]).trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    static func claudeChrome(profileDir: String) async throws -> UsageReading {
-        let out = chromeJS(profile: profileDir, url: "https://claude.ai/settings/usage", js: claudeUsageJS)
-        return try parseClaudeAutomation(out, cacheKey: "chrome:\(profileDir)")
-    }
-    static func claudeSafari() async throws -> UsageReading {
-        let out = safariJS(url: "https://claude.ai/settings/usage", js: claudeUsageJS)
-        return try parseClaudeAutomation(out, cacheKey: "safari")
-    }
-    private static func parseClaudeAutomation(_ out: String, cacheKey: String) throws -> UsageReading {
-        QTLog.write("claude browser[\(cacheKey)]: \(out.prefix(70))")
-        guard out.hasPrefix("{"), let d = out.data(using: .utf8),
-              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-            throw ProviderError.badResponse("Claude browser: \(out.prefix(90))")
-        }
-        if let e = j["__email"] as? String {
-            browserIdentityCache[cacheKey] = AccountIdentity(email: e, name: j["__name"] as? String, plan: nil)
-        }
-        return parseClaudeUsage(j)
-    }
-    static func cursorSafari() async throws -> UsageReading {
-        let out = safariJS(url: "https://cursor.com/api/usage-summary", js: "window.__qt=document.body.innerText;'x'", settle: 5)
-        QTLog.write("cursor safari: \(out.prefix(60))")
-        guard out.hasPrefix("{"), let d = out.data(using: .utf8),
-              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
-            throw ProviderError.badResponse("Cursor safari: \(out.prefix(90))")
-        }
-        return parseCursorUsage(j)
-    }
     static func parseCursorUsage(_ j: [String: Any]) -> UsageReading {
         let iu = j["individualUsage"] as? [String: Any]; let plan = iu?["plan"] as? [String: Any]
-        var pct = (plan?["totalPercentUsed"] as? Double)
-        if pct == nil, let msg = j["autoModelSelectedDisplayMessage"] as? String,
-           let m = msg.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression) {
-            pct = Double(msg[m].dropLast())
-        }
-        if pct == nil, let u = plan?["used"] as? Double, let l = plan?["limit"] as? Double, l > 0 { pct = u / l * 100 }
-        let frac = (pct ?? 0) / 100
         let end = isoDate(j["billingCycleEnd"] as? String)
-        var windows = [QuotaWindow(label: "Included usage", resetText: resetText(end), fraction: frac)]
-        if let od = iu?["onDemand"] as? [String: Any], (od["enabled"] as? Bool) == true,
-           let used = od["used"] as? Double, let limit = od["limit"] as? Double, limit > 0 {
-            windows.append(QuotaWindow(label: "On demand", resetText: resetText(end), fraction: used / limit))
+        let reset = resetText(end)
+        func num(_ k: String) -> Double? { (plan?[k] as? NSNumber)?.doubleValue }
+        // Dois buckets reais do Cursor: "Cursor Models" (auto) e "Other Models" (API).
+        let auto = num("autoPercentUsed")
+        let api  = num("apiPercentUsed")
+        var windows: [QuotaWindow] = []
+        var outer: Double
+        var inner: Double? = nil
+        if let auto {
+            outer = auto / 100
+            windows.append(QuotaWindow(label: "Cursor Models", resetText: reset, fraction: outer))
+            if let api {
+                inner = api / 100
+                windows.append(QuotaWindow(label: "Other Models", resetText: reset, fraction: inner!))
+            }
+        } else {
+            // Fallback: totalPercentUsed, ou mensagem, ou used/limit.
+            var pct = num("totalPercentUsed")
+            if pct == nil, let msg = j["autoModelSelectedDisplayMessage"] as? String,
+               let m = msg.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression) { pct = Double(msg[m].dropLast()) }
+            if pct == nil, let u = num("used"), let l = num("limit"), l > 0 { pct = u / l * 100 }
+            outer = (pct ?? 0) / 100
+            windows.append(QuotaWindow(label: "Included usage", resetText: reset, fraction: outer))
         }
-        return UsageReading(fraction: windows.map(\.fraction).max() ?? frac, windows: windows, fetchedAt: Date())
+        // On-demand como janela extra no hover (não vira anel).
+        if let od = iu?["onDemand"] as? [String: Any], (od["enabled"] as? Bool) == true,
+           let used = (od["used"] as? NSNumber)?.doubleValue, let limit = (od["limit"] as? NSNumber)?.doubleValue, limit > 0 {
+            windows.append(QuotaWindow(label: "On demand", resetText: reset, fraction: used / limit))
+        }
+        return UsageReading(fraction: outer, inner: inner, windows: windows, fetchedAt: Date())
     }
 
     // MARK: util
@@ -632,10 +598,8 @@ final class RefreshCoordinator {
         var seen = Set<ProviderKind>()
         for slot in model.slots {
             QTLog.write("refreshAll slot \(slot.kind) cp=\(slot.chromeProfile ?? "nil")")
-            // Fontes por automação de navegador abrem uma aba: no ciclo automático, no máximo a cada 15 min.
-            if BrowserSource.parse(slot.chromeProfile) != nil || slot.kind == .flow,
-               let last = RefreshCoordinator.lastAutomationRead[slot.id], Date().timeIntervalSince(last) < 900 { continue }
-            if slot.chromeProfile != nil { refresh(slot); continue }   // navegador/web: sempre
+            // Tudo é leitura HTTP em segundo plano agora — sem abrir aba, roda no ciclo normal.
+            if slot.chromeProfile != nil || slot.kind == .flow { refresh(slot); continue }   // navegador/web/flow: sempre
             if vault[slot.id] != nil { refresh(slot); continue }
             if !seen.contains(slot.kind) { seen.insert(slot.kind); refresh(slot) }
         }
@@ -674,13 +638,12 @@ final class RefreshCoordinator {
                 } else if slot.chromeProfile == "web" {
                     r = try await WebSession.shared.read(accountID: slot.id, kind: slot.kind)
                 } else if let src = BrowserSource.parse(slot.chromeProfile) {
-                    // navegador do usuário, já logado: automação (não lê cookie de disco)
-                    switch (slot.kind, src) {
-                    case (.cursor, .safari):                r = try await Providers.cursorSafari()
-                    case (.claude, .safari):                r = try await Providers.claudeSafari()
-                    case (.claude, .chromium(_, let prof)): r = try await Providers.claudeChrome(profileDir: prof)
-                    default: r = slot.kind == .cursor ? try await Providers.cursorBrowser(source: src)
-                                                      : try await Providers.claudeBrowser(source: src)
+                    // Navegador do usuário, já logado: lê o COOKIE de sessão e chama a API
+                    // por HTTP em segundo plano. Nada abre na tela (Safari exige Acesso Total ao Disco).
+                    switch slot.kind {
+                    case .cursor: r = try await Providers.cursorBrowser(source: src)
+                    case .grok:   r = try await Providers.grokBrowser(source: src)
+                    default:      r = try await Providers.claudeBrowser(source: src)
                     }
                 } else {
                     let vaulted = Vault.load()[slot.id]
@@ -688,8 +651,10 @@ final class RefreshCoordinator {
                 }
                 if slot.chromeProfile == nil, Vault.load()[slot.id] != nil, slot.kind != .codex { Vault.storeReading(r, for: slot.id) }
                 model.readings[slot.id] = r
-                RefreshCoordinator.lastAutomationRead[slot.id] = Date()
-                if let src = slot.chromeProfile, let ident = Providers.browserIdentityCache[src.replacingOccurrences(of: "chrome:", with: "chrome:")] ?? Providers.browserIdentityCache[src == "safari" ? "safari" : src] {
+                // Nome/e-mail em segundo plano (uma vez por conta de navegador).
+                if let src = BrowserSource.parse(slot.chromeProfile),
+                   ConfigStore.shared.config.notchOrder.first(where: { $0.id == slot.id })?.email == nil,
+                   let ident = await Providers.browserIdentity(kind: slot.kind, source: src) {
                     ConfigStore.shared.setIdentity(slot.id, ident)
                 }
                 withAnimation(NQMotion.value) { model.setState(slot.id, .reading(fraction: r.fraction, weekly: r.inner)) }

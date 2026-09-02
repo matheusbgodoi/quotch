@@ -1,8 +1,10 @@
 #!/bin/bash
-# Gera Quotch.dmg (app ad-hoc + atalho para Applications). Uso: bash build-dmg.sh
+# Gera Quotch.dmg a partir do app JÁ instalado em /Applications (não recompila,
+# pra não trocar o cdhash e invalidar o Full Disk Access concedido). Para forçar
+# um build antes, rode ./build.sh você mesmo. Uso: bash build-dmg.sh
 set -e
-bash "$(dirname "$0")/build.sh"
 APP="/Applications/Quotch.app"
+[ -d "$APP" ] || { echo "erro: $APP não existe — rode ./build.sh primeiro"; exit 1; }
 OUT=~/Developer/quotch/dist; mkdir -p "$OUT"
 STAGE=$(mktemp -d)
 cp -R "$APP" "$STAGE/Quotch.app"

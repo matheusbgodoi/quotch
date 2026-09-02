@@ -52,5 +52,10 @@ swiftc -O -target arm64-apple-macos14 -lsqlite3 \
   "$SRC"/SettingsWindow.swift \
   "$SRC"/NotchPanel.swift \
   "$SRC"/main.swift
-codesign --force --sign - "$APP"
+SIGN_ID="${QUOTCH_SIGN_ID:-Evie Dev}"
+if security find-identity -v -p codesigning 2>/dev/null | grep -q "$SIGN_ID"; then
+  codesign --force --deep --sign "$SIGN_ID" "$APP" && echo "signed with: $SIGN_ID"
+else
+  codesign --force --sign - "$APP" && echo "signed ad-hoc (Full Disk Access won't persist across rebuilds)"
+fi
 echo "build ok: $APP"

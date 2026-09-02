@@ -7,8 +7,9 @@
 ## What it does
 A thin black strip hugs the edge of your screen. Hover it and it opens into rings — one per AI provider — with the
 percentage of your quota used. **Providers with more than one account show as a stack of cards**: scroll over the
-ring (or tap the dots) to bring the next account to the front. Hover a ring for the full breakdown: every quota
-window, when it resets, who the account belongs to.
+ring to bring the next account to the front, or tap the dots. It reads the dominant axis, so a sideways flick works
+too — a two-finger swipe on the trackpad, or the side thumbwheel on a mouse like the MX Master. Hover a ring for the
+full breakdown: every quota window, when it resets, who the account belongs to.
 
 | Collapsed | Expanded | Hover card | Stack flipped | Settings button |
 |---|---|---|---|---|
@@ -17,11 +18,14 @@ window, when it resets, who the account belongs to.
 ## Providers
 | | Reads | How |
 |---|---|---|
-| **Claude** (Claude Code) | session + weekly windows | Keychain login → `api.anthropic.com/api/oauth/usage` (opt-in toggle) |
-| **Codex** (ChatGPT) | weekly limit | local rollout files — no network |
-| **Cursor** | included usage, on-demand | `state.vscdb` session → `cursor.com/api/usage-summary` |
-| **Antigravity** | — | identity only for now |
-| **Google Flow** | credits (generation) | planned |
+| **Claude** | session + weekly rings | browser session (any Chrome profile / Safari) → `claude.ai/api/…/usage`, or Claude Code's Keychain login |
+| **Codex** (ChatGPT) | weekly limit | local CLI rollout files — no network |
+| **Cursor** | Cursor Models + Other Models rings | browser session → `cursor.com/api/usage-summary` |
+| **Grokbot** | grok-4 + grok-3 daily rings | browser session → `grok.com/rest/rate-limits` |
+| **Antigravity** | daily quota | local bridge to the running Antigravity app |
+| **Google Flow** | credits (generation) | browser session (Safari) → `labs.google` credits |
+
+Every browser account is read **in the background** — Quotch never opens a tab or a window (see below).
 
 Quotch never asks for a password. It reads logins the tools already keep on your Mac, and shows the account's
 name, e-mail (can be hidden) and plan so you always know which account a ring is.
@@ -46,13 +50,19 @@ Right-click the strip for the menu (Keep open · Refresh now · Settings… · O
 
 ## Reading accounts from your browser
 
-Quotch can read a provider straight from the browser where you are already signed in — no login inside the app, no Full Disk Access. It opens the site in a tab of that browser/profile, reads the numbers through the page, and closes the tab.
+Quotch reads a provider straight from the browser where you are already signed in — no login inside the app, and **nothing ever opens on screen**. It reads the session cookie the browser already stores, calls the provider's own usage API over HTTPS in the background, and paints the ring. Add an account from **Settings → +**, pick the browser and profile, and it starts reading.
 
-- **Chrome** (any profile): turn on *View › Developer › Allow JavaScript from Apple Events* once (Quotch also writes the preference; it applies the next time Chrome starts).
-- **Safari**: *Develop › Allow JavaScript from Apple Events*.
-- macOS asks once for Automation permission ("Quotch wants to control Safari/Chrome") — choose Allow.
+**One-time setup: Full Disk Access.** macOS keeps every browser's cookies in a protected folder, so a background reader needs Full Disk Access. Grant it once and every browser account — across all providers and profiles — reads silently forever:
 
-Sources that read directly from the desktop tools need no browser: Claude Code, Codex CLI, Cursor app, Antigravity.
+1. System Settings → Privacy & Security → Full Disk Access.
+2. Add **Quotch** with the **+** and switch it on.
+3. Reopen Quotch.
+
+Chrome profiles are read per profile (Pedro, Letícia, …). Safari is read from its cookie store. No Automation permission, no tabs, no windows.
+
+Sources that read from the desktop tool instead of a browser need no Full Disk Access: **Claude Code** (Keychain login), **Codex** (local CLI files), **Antigravity** (a local bridge to the running app).
+
+> The release build is signed with a stable local identity, so the Full Disk Access grant survives app updates — you grant it once, not on every new version.
 
 ## Credits
 Designed and developed by [matheusbgodoi](https://www.linkedin.com/in/matheusgodoi-engbio/). Provider marks belong to their owners.

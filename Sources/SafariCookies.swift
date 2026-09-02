@@ -10,35 +10,37 @@ enum SafariCookies {
     static var readable: Bool { FileManager.default.isReadableFile(atPath: path) && (try? Data(contentsOf: URL(fileURLWithPath: path)).prefix(4)) == Data("cook".utf8) }
 
     static func cookies(host: String) -> [String: String] {
-        guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)), d.count > 8, d.prefix(4) == Data("cook".utf8) else { return [:] }
-        func u32be(_ o: Int) -> Int { Int(d[o])<<24 | Int(d[o+1])<<16 | Int(d[o+2])<<8 | Int(d[o+3]) }
-        func u32le(_ o: Int) -> UInt32 { UInt32(d[o]) | UInt32(d[o+1])<<8 | UInt32(d[o+2])<<16 | UInt32(d[o+3])<<24 }
-        let nPages = u32be(4)
-        var pageOffsets: [Int] = []; var p = 8
-        for _ in 0..<nPages { pageOffsets.append(u32be(p)); p += 4 }
+        guard let d = try? Data(contentsOf: URL(fileURLWithPath: path)), d.count > 12, d.prefix(4) == Data("cook".utf8) else { return [:] }
+        let n = d.count
+        // Leitura com verificação de limites — nunca acessa fora do buffer.
+        func u32be(_ o: Int) -> Int? { guard o >= 0, o+4 <= n else { return nil }; return Int(d[d.startIndex+o])<<24 | Int(d[d.startIndex+o+1])<<16 | Int(d[d.startIndex+o+2])<<8 | Int(d[d.startIndex+o+3]) }
+        func u32le(_ o: Int) -> Int? { guard o >= 0, o+4 <= n else { return nil }; return Int(d[d.startIndex+o]) | Int(d[d.startIndex+o+1])<<8 | Int(d[d.startIndex+o+2])<<16 | Int(d[d.startIndex+o+3])<<24 }
+        func cstr(_ start: Int) -> String {
+            guard start >= 0, start < n else { return "" }
+            var e = start; let base = d.startIndex
+            while e < n && d[base+e] != 0 { e += 1 }
+            return String(data: d[(base+start)..<(base+e)], encoding: .utf8) ?? ""
+        }
+        guard let nPages = u32be(4), nPages >= 0, nPages < 100_000 else { return [:] }
+        var sizes: [Int] = []
+        for i in 0..<nPages { guard let s = u32be(8 + i*4), s > 8 else { return [:] }; sizes.append(s) }
         var out: [String: String] = [:]
-        var base = 8 + nPages*4 + 4   // + footer size field skip handled by absolute offsets
-        _ = base
-        var abs = 8 + nPages*4        // page data começa após header+offsets (o campo seguinte é o 1º tamanho de página)
-        // offsets no header são tamanhos de página; converte em posições absolutas
-        var pos = abs + 4
-        for size in pageOffsets {
+        var pos = 8 + nPages*4              // dados das páginas começam logo após a tabela de tamanhos
+        for size in sizes {
             let pageStart = pos
-            // dentro da página: [0x0100][numCookies LE][cookieOffsets...]
-            let nc = Int(u32le(pageStart+4))
+            defer { pos = pageStart + size }
+            guard pageStart + 8 <= n, let nc = u32le(pageStart+4), nc >= 0, nc < 100_000 else { continue }
             for i in 0..<nc {
-                let co = pageStart + Int(u32le(pageStart+8+i*4))
-                guard co+40 <= d.count else { continue }
-                let urlOff = co + Int(u32le(co+16))
-                let nameOff = co + Int(u32le(co+20))
-                let valOff  = co + Int(u32le(co+28))
-                func cstr(_ start: Int) -> String { var e=start; while e<d.count && d[e] != 0 { e+=1 }; return String(data: d[start..<e], encoding: .utf8) ?? "" }
-                let dom = cstr(urlOff)
-                if dom == host || dom == "."+host || dom.hasSuffix("."+host) || dom == "."+host {
-                    out[cstr(nameOff)] = cstr(valOff)
+                guard let rel = u32le(pageStart + 8 + i*4) else { break }
+                let co = pageStart + rel                       // offset do cookie é relativo ao início da página
+                guard co >= 0, co + 32 <= n,
+                      let urlR = u32le(co+16), let nameR = u32le(co+20), let valR = u32le(co+28) else { continue }
+                let dom = cstr(co + urlR)
+                if dom == host || dom == "."+host || dom.hasSuffix("."+host) {
+                    let name = cstr(co + nameR)
+                    if !name.isEmpty { out[name] = cstr(co + valR) }
                 }
             }
-            pos = pageStart + size
         }
         return out
     }
@@ -75,6 +77,7 @@ extension ProviderKind {
         switch self {
         case .claude: return ("claude.ai", "sessionKey")
         case .cursor: return ("cursor.com", "WorkosCursorSessionToken")
+        case .grok:   return ("grok.com", "sso")
         default: return nil
         }
     }

@@ -25,6 +25,7 @@ extension ProviderKind {
         case .cursor:      return URL(string: "abrir://cursor.com/dashboard")
         case .antigravity: return URL(string: "abrir://antigravity.google")
         case .flow:        return URL(string: "abrir://labs.google/fx/tools/flow")
+        case .grok:        return URL(string: "abrir://grok.com")
         }
     }
 }

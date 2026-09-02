@@ -62,9 +62,11 @@ final class NotchPanel: NSPanel {
         super.sendEvent(event)
     }
 
-    var onScroll: ((NSPoint, CGFloat) -> Void)?
+    var onScroll: ((NSPoint, CGFloat, CGFloat) -> Void)?
     override func scrollWheel(with event: NSEvent) {
-        if hits(event) { onScroll?(event.locationInWindow, event.scrollingDeltaY); return }
+        // Passa os dois eixos: vertical (wheel comum / 2 dedos) e horizontal
+        // (thumbwheel lateral do MX Master, ou swipe lateral no trackpad).
+        if hits(event) { onScroll?(event.locationInWindow, event.scrollingDeltaX, event.scrollingDeltaY); return }
         super.scrollWheel(with: event)
     }
 
@@ -106,7 +108,7 @@ final class NotchWindowController {
         panel.contentView = hosting
         panel.contextMenuProvider = { [weak self] in self?.makeContextMenu() }
         panel.onClick = { [weak self] in self?.handleClick() }
-        panel.onScroll = { [weak self] pt, dy in self?.handleScroll(at: pt, deltaY: dy) }
+        panel.onScroll = { [weak self] pt, dx, dy in self?.handleScroll(at: pt, deltaX: dx, deltaY: dy) }
         rebuildRoot()
         panel.setFrame(layout.windowFrame, display: true)
 
@@ -154,13 +156,27 @@ final class NotchWindowController {
     }
 
     private var lastFlip = Date.distantPast
-    /// Scroll sobre uma pilha gira as contas (com limite de 1 giro a cada 220 ms).
-    private func handleScroll(at pt: NSPoint, deltaY: CGFloat) {
-        guard abs(deltaY) > 2, Date().timeIntervalSince(lastFlip) > 0.22,
-              let i = cellRectsWindow.firstIndex(where: { $0.contains(pt) }),
-              i < model.stacks.count, model.stacks[i].count > 1 else { return }
-        lastFlip = Date()
-        withAnimation(reduceMotion ? nil : NQMotion.flip) { model.cycle(model.stacks[i].kind, by: deltaY < 0 ? 1 : -1) }
+    /// Scroll sobre uma pilha gira as contas (limite de 1 giro a cada 220 ms).
+    /// Usa o eixo dominante: horizontal (thumbwheel lateral do MX Master / swipe lateral
+    /// de 2 dedos) ou vertical (wheel comum). Direita/baixo = próxima conta.
+    private var scrollAccum: CGFloat = 0
+    private var lastScrollAt = Date.distantPast
+    private func handleScroll(at pt: NSPoint, deltaX: CGFloat, deltaY: CGFloat) {
+        let horizontal = abs(deltaX) >= abs(deltaY)
+        let d = horizontal ? deltaX : deltaY
+        guard let i = cellRectsWindow.firstIndex(where: { $0.contains(pt) }),
+              i < model.stacks.count, model.stacks[i].count > 1 else { scrollAccum = 0; return }
+        // Acumula o gesto: um giro só a cada ~35 pts percorridos, e no máximo 1 a cada 0,3 s.
+        // Zera se o usuário parou (>0,25 s) — assim nudges soltos não empilham.
+        let now = Date()
+        if now.timeIntervalSince(lastScrollAt) > 0.20 || (scrollAccum != 0 && (scrollAccum < 0) != (d < 0)) { scrollAccum = 0 }
+        lastScrollAt = now
+        scrollAccum += d
+        // Exige um gesto bem deliberado: ~140 pts de deslocamento e no máximo 1 troca a cada 0,5 s.
+        guard abs(scrollAccum) >= 140, now.timeIntervalSince(lastFlip) > 0.5 else { return }
+        let step = horizontal ? (scrollAccum > 0 ? 1 : -1) : (scrollAccum < 0 ? 1 : -1)
+        scrollAccum = 0; lastFlip = now
+        withAnimation(reduceMotion ? nil : NQMotion.flip) { model.cycle(model.stacks[i].kind, by: step) }
     }
 
     func relayout() {
@@ -315,6 +331,27 @@ final class NotchWindowController {
             case "claudesignin":
                 let cid = ConfigStore.shared.addAccount(kind: .claude, chromeProfile: "web")
                 WebSession.shared.signIn(accountID: cid, kind: .claude) { ok in QTLog.write("claude signin ok=\(ok)"); NotificationCenter.default.post(name: .quotchRefresh, object: nil) }
+            case "fdacheck":
+                let home = FileManager.default.homeDirectoryForCurrentUser
+                let chrome = home.appendingPathComponent("Library/Application Support/Google/Chrome/Profile 1/Cookies").path
+                let localState = home.appendingPathComponent("Library/Application Support/Google/Chrome/Local State").path
+                let safari = home.appendingPathComponent("Library/Containers/com.apple.Safari/Data/Library/Cookies/Cookies.binarycookies").path
+                // 1) leitura direta (FDA no source)
+                func tryRead(_ p: String) -> String {
+                    guard FileManager.default.fileExists(atPath: p) else { return "no-file" }
+                    do { let fh = try FileHandle(forReadingFrom: URL(fileURLWithPath: p)); defer { try? fh.close() }; _ = try fh.read(upToCount: 4); return "READ-OK" }
+                    catch { return "READ-ERR \((error as NSError).code)" }
+                }
+                QTLog.write("fda chrome-cookies: \(tryRead(chrome))")
+                QTLog.write("fda local-state: \(tryRead(localState))")
+                QTLog.write("fda safari: \(tryRead(safari))")
+                // 2) escrita no temp (dest)
+                let t = FileManager.default.temporaryDirectory
+                QTLog.write("fda tempdir: \(t.path)")
+                let tf = t.appendingPathComponent("qt-w-\(UUID().uuidString).txt")
+                do { try "x".write(to: tf, atomically: true, encoding: .utf8); try? FileManager.default.removeItem(at: tf); QTLog.write("fda tempwrite: WRITE-OK") }
+                catch { QTLog.write("fda tempwrite: WRITE-ERR \((error as NSError).code) \((error as NSError).localizedDescription)") }
+                QTLog.write("fda hasFDA()=\(BrowserAccess.hasFullDiskAccess())")
             case "browsertest":
                 let insts = ChromiumCookies.installed()
                 QTLog.write("installed: \(insts.map{$0.name+"("+$0.dir+")"})")

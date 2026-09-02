@@ -41,6 +41,8 @@ struct Glyph: View {
                 AntigravityGlyph().fill(color)
             case .flow:
                 FlowGlyph().fill(color)
+            case .grok:
+                GrokGlyph().fill(color)
             }
         }
         .frame(width: box.width, height: box.height)
@@ -263,6 +265,30 @@ struct FlowGlyph: Shape {
             p.addArc(center: ctr, radius: rho,
                      startAngle: .radians(a0), endAngle: .radians(a1), clockwise: true)
         }
+        p.closeSubpath()
+        return p
+    }
+}
+
+// MARK: - Grok (x.ai)
+//
+// Marca angular: uma barra diagonal grossa (paralelogramo) do canto superior
+// direito ao inferior esquerdo, no espírito minimalista do logo do Grok.
+struct GrokGlyph: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + w * x, y: rect.minY + h * y) }
+        var p = Path()
+        p.move(to: pt(0.58, 0.06))
+        p.addLine(to: pt(0.92, 0.06))
+        p.addLine(to: pt(0.42, 0.94))
+        p.addLine(to: pt(0.08, 0.94))
+        p.closeSubpath()
+        // pequeno recorte quadrado no topo-direito, assinatura do Grok
+        p.move(to: pt(0.66, 0.06))
+        p.addLine(to: pt(0.92, 0.06))
+        p.addLine(to: pt(0.92, 0.40))
+        p.addLine(to: pt(0.78, 0.40))
         p.closeSubpath()
         return p
     }

@@ -270,6 +270,8 @@ extension NotchRootView {
         case .cursor: return [QuotaWindow(label: "Included usage", resetText: "Resets 30 Sep", fraction: f)]
         case .antigravity: return [QuotaWindow(label: "Daily quota", resetText: "Resets 00:00", fraction: f)]
         case .flow:   return [QuotaWindow(label: "Credits", resetText: "Renews 30 Sep", fraction: f)]
+        case .grok:   return [QuotaWindow(label: "grok-4 today", resetText: "Resets 00:00", fraction: f),
+                              QuotaWindow(label: "grok-3 today", resetText: "Resets 00:00", fraction: f * 0.4)]
         }
     }
 }

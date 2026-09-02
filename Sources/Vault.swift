@@ -71,7 +71,7 @@ enum Vault {
                   let tokens = root["tokens"] as? [String: Any],
                   let acc = tokens["account_id"] as? String else { return nil }
             return ["accountId": acc]
-        case .antigravity, .flow: return nil
+        case .antigravity, .flow, .grok: return nil
         }
     }
 }

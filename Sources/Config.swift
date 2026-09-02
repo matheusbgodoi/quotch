@@ -7,7 +7,7 @@ import SwiftUI
 // podem usar marcas diferentes (ou nenhuma) para o usuário distinguir os anéis.
 
 enum GlyphID: String, Codable, CaseIterable, Identifiable {
-    case claude, openai, cursor, antigravity, flow, generic
+    case claude, openai, cursor, antigravity, flow, grok, generic
     var id: String { rawValue }
 
     var label: String {
@@ -17,6 +17,7 @@ enum GlyphID: String, Codable, CaseIterable, Identifiable {
         case .cursor:      return "Cursor"
         case .antigravity: return "Antigravity"
         case .flow:        return "Flow"
+        case .grok:        return "Grokbot"
         case .generic:     return "No mark"
         }
     }
@@ -30,6 +31,7 @@ enum GlyphID: String, Codable, CaseIterable, Identifiable {
         case .cursor:      return .cursor
         case .antigravity: return .antigravity
         case .flow:        return .flow
+        case .grok:        return .grok
         case .generic:     return nil
         }
     }
@@ -52,6 +54,7 @@ extension ProviderKind {
         case .cursor:      return .cursor
         case .antigravity: return .antigravity
         case .flow:        return .flow
+        case .grok:        return .grok
         }
     }
 
@@ -63,6 +66,7 @@ extension ProviderKind {
         case .cursor:      return "Cursor"
         case .antigravity: return "Antigravity"
         case .flow:        return "Google Flow"
+        case .grok:        return "Grokbot"
         }
     }
 
@@ -74,6 +78,7 @@ extension ProviderKind {
         case .cursor:      return "cursor.com"
         case .antigravity: return "antigravity.google"
         case .flow:        return "labs.google"
+        case .grok:        return "grok.com"
         }
     }
 
@@ -85,6 +90,7 @@ extension ProviderKind {
         case .cursor:      return "cursor.com/dashboard"
         case .antigravity: return "antigravity.google"
         case .flow:        return "labs.google/fx/tools/flow"
+        case .grok:        return "grok.com"
         }
     }
 
@@ -95,7 +101,7 @@ extension ProviderKind {
         switch self {
         case .claude:
             return "Run Claude Code once — it signs in and refreshes the token this reads. Use /login there to change account."
-        case .codex, .cursor, .antigravity:
+        case .codex, .cursor, .antigravity, .grok:
             return "Switch accounts in \(toolName); the notch follows."
         case .flow:
             return "Sign out in the \(toolName) window to use another account."
@@ -110,6 +116,7 @@ extension ProviderKind {
         case .cursor:      return "Sign in to Cursor in the editor"
         case .antigravity: return "Sign in to Antigravity to read your usage"
         case .flow:        return "Sign in with Google Flow"
+        case .grok:        return "Sign in to Grok in your browser"
         }
     }
 }
@@ -461,12 +468,6 @@ final class ConfigStore: ObservableObject {
     }
 
     func removeAccount(_ id: UUID) {
-        let wasChrome = config.accounts.first(where: { $0.id == id })?.chromeProfile?.hasPrefix("chrome:") == true
-        defer {
-            if wasChrome, !config.accounts.contains(where: { $0.chromeProfile?.hasPrefix("chrome:") == true }) {
-                _ = Providers.shell("defaults write com.google.Chrome AllowJavascriptAppleEvents -bool false")   // revoga: sem contas de Chrome, sem scripting
-            }
-        }
         Vault.remove(id)
         config.accounts.removeAll { $0.id == id }
     }
