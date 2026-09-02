@@ -355,6 +355,12 @@ enum Providers {
 
     /// Identidade (e-mail/nome/plano) de uma conta lida de um navegador.
     static func browserIdentity(kind: ProviderKind, source: BrowserSource) async -> AccountIdentity? {
+        let ck: String = { if case .chromium(let k, let p) = source { return "\(k):\(p)" }; return "safari" }()
+        if let c = browserIdentityCache[ck] { return c }
+        if kind == .claude {
+            if case .chromium(_, let p) = source { _ = try? await claudeChrome(profileDir: p) } else { _ = try? await claudeSafari() }
+            if let c = browserIdentityCache[ck] { return c }
+        }
         switch kind {
         case .claude: return claudeBrowserIdentity(source: source)
         case .cursor:
@@ -393,6 +399,195 @@ enum Providers {
         let outer = byKind["five_hour"] ?? windows.map(\.fraction).max() ?? 0
         let inner = byKind["seven_day"]
         return UsageReading(fraction: outer, inner: inner, windows: windows, fetchedAt: Date())
+    }
+
+    // MARK: Flow — via Safari (sessão viva do usuário). Pega o access_token de
+    // labs.google/fx/api/auth/session (AppleScript) e lê /v1/credits com Referer.
+    // Token cacheado até expirar → o Safari só é tocado ~1x/hora.
+    private static var flowToken: (token: String, email: String?, name: String?, exp: Date)?
+    static func flowSafari() async throws -> UsageReading {
+        let tok = try flowAccessToken()
+        var req = URLRequest(url: URL(string: "https://aisandbox-pa.googleapis.com/v1/credits")!)
+        req.setValue("Bearer \(tok.token)", forHTTPHeaderField: "Authorization")
+        req.setValue("https://labs.google/", forHTTPHeaderField: "Referer")
+        req.timeoutInterval = 12
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+              let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let credits = (j["credits"] as? Double) else { throw ProviderError.badResponse("Flow credits") }
+        let total = (j["subscriptionCredits"] as? Double) ?? max(credits, 1)
+        let used = total > 0 ? max(0, (total - credits) / total) : 0
+        let w = QuotaWindow(label: "\(Int(credits)) credits left", resetText: "", fraction: used)
+        return UsageReading(fraction: used, windows: [w], fetchedAt: Date())
+    }
+    static func flowIdentity() -> AccountIdentity? {
+        guard let t = try? flowAccessToken() else { return nil }
+        return AccountIdentity(email: t.email, name: t.name, plan: "Flow")
+    }
+    private static func flowAccessToken() throws -> (token: String, email: String?, name: String?, exp: Date) {
+        if let c = flowToken, c.exp > Date().addingTimeInterval(60) { return c }
+        // AppleScript: abre a sessão no Safari, lê o JSON, fecha a aba.
+        let script = """
+        tell application "Safari"
+          make new document with properties {URL:"https://labs.google/fx/api/auth/session"}
+          delay 4
+          set r to do JavaScript "document.body.innerText" in front document
+          close front document
+          return r
+        end tell
+        """
+        automationLock.lock()
+        let out = shell("/usr/bin/osascript", ["-e", script])
+        automationLock.unlock()
+        guard let d = out.data(using: .utf8),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
+              let tok = j["access_token"] as? String, !tok.isEmpty else { throw ProviderError.badResponse("Flow: entre no Safari") }
+        let user = j["user"] as? [String: Any]
+        let exp = (j["expires"] as? String).flatMap { isoDate($0) } ?? Date().addingTimeInterval(3000)
+        let c = (token: tok, email: user?["email"] as? String, name: user?["name"] as? String, exp: exp)
+        flowToken = c
+        return c
+    }
+    /// Shell com argumentos (para osascript).
+    static func shell(_ path: String, _ args: [String]) -> String {
+        let p = Process(); p.launchPath = path; p.arguments = args
+        let pipe = Pipe(); p.standardOutput = pipe; p.standardError = Pipe()
+        try? p.run(); p.waitUntilExit()
+        return String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+    }
+
+    // MARK: Automação do NAVEGADOR do usuário (já logado) — como o Flow via Safari.
+    // Chrome: abre a URL num PERFIL específico (--profile-directory), acha a aba por nonce,
+    // roda JS via Apple Events (precisa de "Permitir JavaScript de Eventos da Apple" no Chrome).
+    // Safari: "Permitir JavaScript de Eventos da Apple" no menu Desenvolvedor.
+    static let claudeUsageJS = "window.__qt='PENDING';(async()=>{try{let org=(document.cookie.match(/lastActiveOrg=([^;]+)/)||[])[1];const H={headers:{'anthropic-client-platform':'web_claude_ai'}};if(!org){const o=await (await fetch('/api/organizations',H)).json();org=o&&o[0]&&(o[0].uuid||o[0].id);}if(!org){window.__qt='NOORG';return;}const r=await fetch('/api/organizations/'+org+'/usage?source=web',H);if(r.status!==200){window.__qt='HTTP'+r.status;return;}const j=await r.json();try{const b=await (await fetch('/api/bootstrap',H)).json();const a=b.account||{};j.__email=a.email_address||a.email||null;j.__name=a.full_name||null;}catch(e){}window.__qt=JSON.stringify(j);}catch(e){window.__qt='ERR '+e}})();'started'"
+    static var browserIdentityCache: [String: AccountIdentity] = [:]
+    /// Uma automação de navegador por vez (Safari/Chrome): evita duas abas disputando "front document".
+    static let automationLock = NSLock()
+
+    private static func tmpWrite(_ text: String, _ ext: String) -> String {
+        let p = FileManager.default.temporaryDirectory.appendingPathComponent("quotch-\(UUID().uuidString).\(ext)").path
+        try? text.write(toFile: p, atomically: true, encoding: .utf8); return p
+    }
+    /// Roda JS numa aba nova do Chrome no perfil dado; o JS deve escrever window.__qt ao terminar.
+    static func chromeJS(profile: String, url: String, js: String) -> String {
+        automationLock.lock(); defer { automationLock.unlock() }
+        let nonce = "qt-" + String(UUID().uuidString.prefix(8)).lowercased()
+        let p = Process(); p.launchPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+        p.arguments = ["--profile-directory=\(profile)", url + "#" + nonce]
+        p.standardOutput = Pipe(); p.standardError = Pipe()
+        try? p.run()
+        Thread.sleep(forTimeInterval: 7)
+        let jsPath = tmpWrite(js, "js")
+        let script = """
+        set js to (read POSIX file "\(jsPath)" as «class utf8»)
+        tell application "Google Chrome"
+          set target to missing value
+          repeat with w in windows
+            repeat with t in tabs of w
+              if URL of t contains "\(nonce)" then set target to t
+            end repeat
+          end repeat
+          if target is missing value then return "NO_TAB"
+          try
+            execute target javascript js
+          on error e
+            close target
+            return "JS_ERR: " & e
+          end try
+          repeat 25 times
+            delay 1
+            set v to execute target javascript "window.__qt"
+            if v is not "PENDING" then
+              close target
+              return v
+            end if
+          end repeat
+          close target
+          return "TIMEOUT"
+        end tell
+        """
+        let asPath = tmpWrite(script, "applescript")
+        defer { try? FileManager.default.removeItem(atPath: jsPath); try? FileManager.default.removeItem(atPath: asPath) }
+        return shell("/usr/bin/osascript", [asPath]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    /// Roda JS numa aba nova do Safari; o JS deve escrever window.__qt.
+    static func safariJS(url: String, js: String, settle: Double = 6) -> String {
+        automationLock.lock(); defer { automationLock.unlock() }
+        let nonce = "qt-" + String(UUID().uuidString.prefix(8)).lowercased()
+        let jsPath = tmpWrite(js, "js")
+        let script = """
+        set js to (read POSIX file "\(jsPath)" as «class utf8»)
+        tell application "Safari"
+          make new document with properties {URL:"\(url)#\(nonce)"}
+          delay \(settle)
+          set target to missing value
+          repeat with w in windows
+            repeat with t in tabs of w
+              if URL of t contains "\(nonce)" then set target to t
+            end repeat
+          end repeat
+          if target is missing value then return "NO_TAB"
+          do JavaScript js in target
+          set v to "PENDING"
+          repeat 25 times
+            delay 1
+            set v to do JavaScript "window.__qt" in target
+            if v is not "PENDING" then exit repeat
+          end repeat
+          close target
+          return v
+        end tell
+        """
+        let asPath = tmpWrite(script, "applescript")
+        defer { try? FileManager.default.removeItem(atPath: jsPath); try? FileManager.default.removeItem(atPath: asPath) }
+        return shell("/usr/bin/osascript", [asPath]).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func claudeChrome(profileDir: String) async throws -> UsageReading {
+        let out = chromeJS(profile: profileDir, url: "https://claude.ai/settings/usage", js: claudeUsageJS)
+        return try parseClaudeAutomation(out, cacheKey: "chrome:\(profileDir)")
+    }
+    static func claudeSafari() async throws -> UsageReading {
+        let out = safariJS(url: "https://claude.ai/settings/usage", js: claudeUsageJS)
+        return try parseClaudeAutomation(out, cacheKey: "safari")
+    }
+    private static func parseClaudeAutomation(_ out: String, cacheKey: String) throws -> UsageReading {
+        QTLog.write("claude browser[\(cacheKey)]: \(out.prefix(70))")
+        guard out.hasPrefix("{"), let d = out.data(using: .utf8),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            throw ProviderError.badResponse("Claude browser: \(out.prefix(90))")
+        }
+        if let e = j["__email"] as? String {
+            browserIdentityCache[cacheKey] = AccountIdentity(email: e, name: j["__name"] as? String, plan: nil)
+        }
+        return parseClaudeUsage(j)
+    }
+    static func cursorSafari() async throws -> UsageReading {
+        let out = safariJS(url: "https://cursor.com/api/usage-summary", js: "window.__qt=document.body.innerText;'x'", settle: 5)
+        QTLog.write("cursor safari: \(out.prefix(60))")
+        guard out.hasPrefix("{"), let d = out.data(using: .utf8),
+              let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else {
+            throw ProviderError.badResponse("Cursor safari: \(out.prefix(90))")
+        }
+        return parseCursorUsage(j)
+    }
+    static func parseCursorUsage(_ j: [String: Any]) -> UsageReading {
+        let iu = j["individualUsage"] as? [String: Any]; let plan = iu?["plan"] as? [String: Any]
+        var pct = (plan?["totalPercentUsed"] as? Double)
+        if pct == nil, let msg = j["autoModelSelectedDisplayMessage"] as? String,
+           let m = msg.range(of: #"(\d+(?:\.\d+)?)%"#, options: .regularExpression) {
+            pct = Double(msg[m].dropLast())
+        }
+        if pct == nil, let u = plan?["used"] as? Double, let l = plan?["limit"] as? Double, l > 0 { pct = u / l * 100 }
+        let frac = (pct ?? 0) / 100
+        let end = isoDate(j["billingCycleEnd"] as? String)
+        var windows = [QuotaWindow(label: "Included usage", resetText: resetText(end), fraction: frac)]
+        if let od = iu?["onDemand"] as? [String: Any], (od["enabled"] as? Bool) == true,
+           let used = od["used"] as? Double, let limit = od["limit"] as? Double, limit > 0 {
+            windows.append(QuotaWindow(label: "On demand", resetText: resetText(end), fraction: used / limit))
+        }
+        return UsageReading(fraction: windows.map(\.fraction).max() ?? frac, windows: windows, fetchedAt: Date())
     }
 
     // MARK: util
@@ -444,6 +639,9 @@ final class RefreshCoordinator {
         var seen = Set<ProviderKind>()
         for slot in model.slots {
             QTLog.write("refreshAll slot \(slot.kind) cp=\(slot.chromeProfile ?? "nil")")
+            // Fontes por automação de navegador abrem uma aba: no ciclo automático, no máximo a cada 15 min.
+            if BrowserSource.parse(slot.chromeProfile) != nil || slot.kind == .flow,
+               let last = model.readings[slot.id]?.fetchedAt, Date().timeIntervalSince(last) < 900 { continue }
             if slot.chromeProfile != nil { refresh(slot); continue }   // navegador/web: sempre
             if vault[slot.id] != nil { refresh(slot); continue }
             if !seen.contains(slot.kind) { seen.insert(slot.kind); refresh(slot) }
@@ -478,11 +676,19 @@ final class RefreshCoordinator {
             defer { inFlight.remove(slot.id) }
             do {
                 let r: UsageReading
-                if slot.chromeProfile == "web" {
+                if slot.kind == .flow {
+                    r = try await Providers.flowSafari()
+                } else if slot.chromeProfile == "web" {
                     r = try await WebSession.shared.read(accountID: slot.id, kind: slot.kind)
                 } else if let src = BrowserSource.parse(slot.chromeProfile) {
-                    r = slot.kind == .cursor ? try await Providers.cursorBrowser(source: src)
-                                             : try await Providers.claudeBrowser(source: src)
+                    // navegador do usuário, já logado: automação (não lê cookie de disco)
+                    switch (slot.kind, src) {
+                    case (.cursor, .safari):                r = try await Providers.cursorSafari()
+                    case (.claude, .safari):                r = try await Providers.claudeSafari()
+                    case (.claude, .chromium(_, let prof)): r = try await Providers.claudeChrome(profileDir: prof)
+                    default: r = slot.kind == .cursor ? try await Providers.cursorBrowser(source: src)
+                                                      : try await Providers.claudeBrowser(source: src)
+                    }
                 } else {
                     let vaulted = Vault.load()[slot.id]
                     r = try await Providers.fetch(slot.kind, allowKeychain: allow, vaulted: vaulted)
