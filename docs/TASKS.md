@@ -23,6 +23,9 @@ fetch same-origin na própria página. É o modelo whitelabel: qualquer um clica
 - Automação serializada (1 por vez) e no ciclo automático no máximo a cada 15 min por conta.
 
 ## Feito
+- [x] Claude por perfil do Chrome VERIFICADO no app (Pedro 61%, Letícia 2%, com nome/e-mail). Flow e Cursor via Safari OK.
+- [x] Anel semanal: kinds reais são session/weekly_all/weekly_scoped.
+- [x] Seletor lista todos os perfis; app grava AllowJavascriptAppleEvents ao adicionar conta do Chrome.
 - [x] Cotas honestas: sem número falso; "—" até ler de verdade.
 - [x] DOIS anéis: externo = janela curta (sessão/diário), interno = semanal (Claude/Codex).
 - [x] WebSession reescrita (login no app) para Claude/Cursor/Flow, sessão persistente por conta.

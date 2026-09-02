@@ -43,5 +43,16 @@ Right-click the strip for the menu (Keep open · Refresh now · Settings… · O
 ## Docs
 `docs/HANDOFF.md` (start here) · `docs/TASKS.md` (what's done / next) · `docs/spec.md` · `docs/design-tokens.md` · `docs/backlog.md`.
 
+
+## Reading accounts from your browser
+
+Quotch can read a provider straight from the browser where you are already signed in — no login inside the app, no Full Disk Access. It opens the site in a tab of that browser/profile, reads the numbers through the page, and closes the tab.
+
+- **Chrome** (any profile): turn on *View › Developer › Allow JavaScript from Apple Events* once (Quotch also writes the preference; it applies the next time Chrome starts).
+- **Safari**: *Develop › Allow JavaScript from Apple Events*.
+- macOS asks once for Automation permission ("Quotch wants to control Safari/Chrome") — choose Allow.
+
+Sources that read directly from the desktop tools need no browser: Claude Code, Codex CLI, Cursor app, Antigravity.
+
 ## Credits
 Designed and developed by [matheusbgodoi](https://www.linkedin.com/in/matheusgodoi-engbio/). Provider marks belong to their owners.

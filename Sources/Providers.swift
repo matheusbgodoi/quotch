@@ -378,7 +378,7 @@ enum Providers {
     /// Parser único de /usage do Claude (usado pelo webview e pelo Keychain).
     /// Anel de fora = janela de 5h (sessão); anel de dentro = semanal.
     static func parseClaudeUsage(_ j: [String: Any]) -> UsageReading {
-        let labels = ["five_hour":"Current session","seven_day":"All models","seven_day_opus":"Opus","seven_day_sonnet":"Sonnet"]
+        let labels = ["five_hour":"Current session","session":"Current session","seven_day":"All models","weekly_all":"All models","weekly_scoped":"Opus","seven_day_opus":"Opus","seven_day_sonnet":"Sonnet"]
         var windows: [QuotaWindow] = []
         var byKind: [String: Double] = [:]
         if let limits = j["limits"] as? [[String: Any]] {
@@ -396,8 +396,10 @@ enum Providers {
                 windows.append(QuotaWindow(label:n, resetText: resetText(isoDate(b["resets_at"] as? String)), fraction:u/100))
             }
         }
-        let outer = byKind["five_hour"] ?? windows.map(\.fraction).max() ?? 0
-        let inner = byKind["seven_day"]
+        let sessionJ = (j["five_hour"] as? [String: Any])?["utilization"] as? Double
+        let weeklyJ  = (j["seven_day"] as? [String: Any])?["utilization"] as? Double
+        let outer = byKind["session"] ?? byKind["five_hour"] ?? sessionJ.map { $0/100 } ?? windows.map(\.fraction).max() ?? 0
+        let inner = byKind["weekly_all"] ?? byKind["seven_day"] ?? weeklyJ.map { $0/100 }
         return UsageReading(fraction: outer, inner: inner, windows: windows, fetchedAt: Date())
     }
 
@@ -426,19 +428,7 @@ enum Providers {
     }
     private static func flowAccessToken() throws -> (token: String, email: String?, name: String?, exp: Date) {
         if let c = flowToken, c.exp > Date().addingTimeInterval(60) { return c }
-        // AppleScript: abre a sessão no Safari, lê o JSON, fecha a aba.
-        let script = """
-        tell application "Safari"
-          make new document with properties {URL:"https://labs.google/fx/api/auth/session"}
-          delay 4
-          set r to do JavaScript "document.body.innerText" in front document
-          close front document
-          return r
-        end tell
-        """
-        automationLock.lock()
-        let out = shell("/usr/bin/osascript", ["-e", script])
-        automationLock.unlock()
+        let out = safariJS(url: "https://labs.google/fx/api/auth/session", js: "window.__qt=document.body.innerText;'x'", settle: 4)
         guard let d = out.data(using: .utf8),
               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
               let tok = j["access_token"] as? String, !tok.isEmpty else { throw ProviderError.badResponse("Flow: entre no Safari") }
@@ -699,6 +689,9 @@ final class RefreshCoordinator {
                 if slot.chromeProfile == nil, Vault.load()[slot.id] != nil, slot.kind != .codex { Vault.storeReading(r, for: slot.id) }
                 model.readings[slot.id] = r
                 RefreshCoordinator.lastAutomationRead[slot.id] = Date()
+                if let src = slot.chromeProfile, let ident = Providers.browserIdentityCache[src.replacingOccurrences(of: "chrome:", with: "chrome:")] ?? Providers.browserIdentityCache[src == "safari" ? "safari" : src] {
+                    ConfigStore.shared.setIdentity(slot.id, ident)
+                }
                 withAnimation(NQMotion.value) { model.setState(slot.id, .reading(fraction: r.fraction, weekly: r.inner)) }
                 model.refreshToken[slot.id, default: 0] += 1
                 failures[slot.id] = 0; retryNotBefore[slot.id] = nil

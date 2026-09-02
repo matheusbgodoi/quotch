@@ -674,12 +674,13 @@ struct BrowserPickerSheet: View {
     struct Row: Identifiable { let id = UUID(); let browserKey: String; let browserName: String; let profileDir: String; let profileName: String; let signedIn: Bool }
     @State private var rows: [Row] = []
     @State private var loading = true
+    @State private var pendingChrome: String? = nil
     private func computeRows() -> [Row] {
         let sc = kind.sessionCookie
         var out: [Row] = []
         for b in ChromiumCookies.installed() {
             for p in ChromiumCookies.profiles(b) {
-                let ok = sc.map { ChromiumCookies.hasCookie(host: $0.host, name: $0.name, browser: b, profile: p.dir) } ?? false
+                let ok = true   // automação usa o navegador logado; não depende de cookie em disco
                 out.append(Row(browserKey: b.key, browserName: b.name, profileDir: p.dir, profileName: p.name, signedIn: ok))
             }
         }
@@ -693,25 +694,11 @@ struct BrowserPickerSheet: View {
                 AccountGlyphChip(glyph: kind.defaultGlyph, size: 26)
                 VStack(alignment: .leading, spacing: 1) {
                     Text("Add a \(kind.displayName) account").font(.headline)
-                    Text("Pick a browser you're already signed in to.").font(.caption).foregroundStyle(.secondary)
+                    Text("Pick the browser and profile where you're signed in. Quotch reads it through the browser itself.").font(.caption).foregroundStyle(.secondary)
                 }
             }
             .padding(.bottom, 12)
 
-            if !BrowserAccess.hasFullDiskAccess() {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "lock.shield").foregroundStyle(.orange)
-                        Text("Quotch needs Full Disk Access to read your browsers").font(.callout.weight(.medium))
-                    }
-                    Text("macOS blocks apps from reading another browser's session until you allow it. Turn on Quotch in Full Disk Access, then reopen this window — your browsers and profiles appear here.")
-                        .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    Button("Open Full Disk Access settings") { BrowserAccess.openFullDiskAccessSettings() }
-                }
-                .padding(12)
-                .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.12)))
-                .padding(.bottom, 6)
-            }
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
                     if loading {
@@ -723,7 +710,7 @@ struct BrowserPickerSheet: View {
                     ForEach(rows) { r in
                         if r.signedIn {
                             pickRow(icon: "person.crop.circle.badge.checkmark", title: r.profileName, sub: r.browserName) {
-                                onPick("\(r.browserKey):\(r.profileDir)"); dismiss()
+                                pendingChrome = "\(r.browserKey):\(r.profileDir)"
                             }
                         } else {
                             HStack(spacing: 10) {
@@ -736,7 +723,7 @@ struct BrowserPickerSheet: View {
                     }
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Safari").font(.subheadline.weight(.semibold))
-                        if SafariCookies.readable {
+                        if true {
                             pickRow(icon: "safari", title: "Safari", sub: "") { onPick("safari"); dismiss() }
                         } else {
                             HStack(spacing: 10) {
@@ -761,6 +748,16 @@ struct BrowserPickerSheet: View {
         .padding(20)
         .frame(width: 420)
         .task { rows = computeRows(); loading = false }
+        .alert("Let Quotch read Chrome?", isPresented: Binding(get: { pendingChrome != nil }, set: { if !$0 { pendingChrome = nil } })) {
+            Button("Enable and add") {
+                _ = Providers.shell("defaults write com.google.Chrome AllowJavascriptAppleEvents -bool true")
+                if let s = pendingChrome { onPick(s) }; pendingChrome = nil; dismiss()
+            }
+            Button("Add without changing Chrome") { if let s = pendingChrome { onPick(s) }; pendingChrome = nil; dismiss() }
+            Button("Cancel", role: .cancel) { pendingChrome = nil }
+        } message: {
+            Text("Quotch reads your quota by running a small script inside a Chrome tab. This needs Chrome's \"Allow JavaScript from Apple Events\" (View › Developer). Note: while it is on, any app on this Mac can script Chrome the same way. Quotch turns it back off when you remove your last Chrome account. It takes effect after Chrome restarts, or immediately if you tick the menu item yourself.")
+        }
     }
 
     @ViewBuilder private func pickRow(icon: String, title: String, sub: String, _ act: @escaping () -> Void) -> some View {

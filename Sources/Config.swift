@@ -461,6 +461,12 @@ final class ConfigStore: ObservableObject {
     }
 
     func removeAccount(_ id: UUID) {
+        let wasChrome = config.accounts.first(where: { $0.id == id })?.chromeProfile?.hasPrefix("chrome:") == true
+        defer {
+            if wasChrome, !config.accounts.contains(where: { $0.chromeProfile?.hasPrefix("chrome:") == true }) {
+                _ = Providers.shell("defaults write com.google.Chrome AllowJavascriptAppleEvents -bool false")   // revoga: sem contas de Chrome, sem scripting
+            }
+        }
         Vault.remove(id)
         config.accounts.removeAll { $0.id == id }
     }
