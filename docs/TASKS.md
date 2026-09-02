@@ -42,6 +42,7 @@ API de uso do provedor por HTTPS (URLSession). Nenhuma aba, nenhuma janela, nenh
 
 ## Pendente / notas
 - [ ] Antigravity: a ponte local responde 200 só com o app Antigravity aberto; fechado, cai p/ nuvem (401) e fica stale.
+- [ ] Flow: `aisandbox-pa.googleapis.com/v1/credits` passou a devolver 401 mesmo com token de sessão válido (mudança do Google, set/2026). A sessão do Safari ainda dá `access_token`; falta o endpoint novo de créditos. Anel mostra o último valor.
 - [ ] Identidade (nome/e-mail) do Grokbot e do Cursor via Safari é opcional; hoje mostra o nome do provedor.
 - [ ] Onboarding de 1ª vez explicando o passo único do Full Disk Access.
 - [ ] Distribuição: build assinado com Evie Dev não é notarizado; em outra máquina, abrir com clique-direito › Abrir.

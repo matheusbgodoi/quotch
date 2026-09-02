@@ -272,24 +272,61 @@ struct FlowGlyph: Shape {
 
 // MARK: - Grok (x.ai)
 //
-// Marca angular: uma barra diagonal grossa (paralelogramo) do canto superior
-// direito ao inferior esquerdo, no espírito minimalista do logo do Grok.
+// Marca oficial do Grok (traço do favicon de grok.com, viewBox 512). Parser próprio
+// (M/L/C/V absolutos); normaliza pela bounding box da marca para preencher a caixa.
 struct GrokGlyph: Shape {
+    static let data =
+    "M210.484 312.759L343.465 210.383C349.984 205.364 359.302 207.322 362.408 215.117C378.758 256.231 371.454 305.64 338.925 339.563C306.397 373.487 261.137 380.927 219.768 363.983L174.577 385.803C239.394 432.008 318.104 420.581 367.289 369.251C406.303 328.564 418.386 273.104 407.088 223.091L407.19 223.198C390.807 149.726 411.218 120.359 453.03 60.3072C454.02 58.8833 455.01 57.4595 456 56L400.978 113.382V113.204L210.45 312.794"
+
+    /// Path unitário (0…1), já centrado pela própria bounding box.
+    static let unitPath: Path = {
+        // 1) parse em pontos absolutos (espaço 512).
+        var pts: [(op: Character, c: [CGPoint])] = []
+        var nums: [CGFloat] = []; var op: Character = "M"; var cur = CGPoint.zero
+        var token = ""
+        func numsToPoints() -> [CGPoint] { stride(from: 0, to: nums.count - 1, by: 2).map { CGPoint(x: nums[$0], y: nums[$0+1]) } }
+        func flush() {
+            guard !nums.isEmpty else { return }   // ignora o flush inicial (sem números)
+            switch op {
+            case "M", "L": let ps = numsToPoints(); if let last = ps.last { cur = last }; pts.append((op, ps))
+            case "C": let ps = numsToPoints(); if let last = ps.last { cur = last }; pts.append((op, ps))
+            case "V": if let y = nums.first { cur = CGPoint(x: cur.x, y: y); pts.append(("L", [cur])) }
+            case "H": if let x = nums.first { cur = CGPoint(x: x, y: cur.y); pts.append(("L", [cur])) }
+            default: break
+            }
+            nums.removeAll(keepingCapacity: true)
+        }
+        func pushToken() { if !token.isEmpty, let v = Double(token) { nums.append(CGFloat(v)) }; token = "" }
+        for ch in data {
+            if "MLCVHZ".contains(ch) { pushToken(); flush(); op = ch }
+            else if ch == " " || ch == "," { pushToken() }
+            else if ch == "-" { pushToken(); token = "-" }
+            else { token.append(ch) }
+        }
+        pushToken(); flush()
+        // 2) bounding box de todos os pontos.
+        let all = pts.flatMap { $0.c }
+        let minX = all.map(\.x).min() ?? 0, maxX = all.map(\.x).max() ?? 1
+        let minY = all.map(\.y).min() ?? 0, maxY = all.map(\.y).max() ?? 1
+        let span = max(maxX - minX, maxY - minY)
+        let offX = (span - (maxX - minX)) / 2, offY = (span - (maxY - minY)) / 2
+        func n(_ p: CGPoint) -> CGPoint { CGPoint(x: (p.x - minX + offX) / span, y: (p.y - minY + offY) / span) }
+        // 3) monta o path unitário.
+        var path = Path()
+        for seg in pts {
+            switch seg.op {
+            case "M": path.move(to: n(seg.c[0]))
+            case "L": for p in seg.c { path.addLine(to: n(p)) }
+            case "C": var i = 0; while i + 2 < seg.c.count { path.addCurve(to: n(seg.c[i+2]), control1: n(seg.c[i]), control2: n(seg.c[i+1])); i += 3 }
+            default: break
+            }
+        }
+        return path
+    }()
+
     func path(in rect: CGRect) -> Path {
-        let w = rect.width, h = rect.height
-        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: rect.minX + w * x, y: rect.minY + h * y) }
-        var p = Path()
-        p.move(to: pt(0.58, 0.06))
-        p.addLine(to: pt(0.92, 0.06))
-        p.addLine(to: pt(0.42, 0.94))
-        p.addLine(to: pt(0.08, 0.94))
-        p.closeSubpath()
-        // pequeno recorte quadrado no topo-direito, assinatura do Grok
-        p.move(to: pt(0.66, 0.06))
-        p.addLine(to: pt(0.92, 0.06))
-        p.addLine(to: pt(0.92, 0.40))
-        p.addLine(to: pt(0.78, 0.40))
-        p.closeSubpath()
-        return p
+        let side = min(rect.width, rect.height)
+        let t = CGAffineTransform(translationX: rect.midX - side/2, y: rect.midY - side/2)
+        return Self.unitPath.applying(CGAffineTransform(scaleX: side, y: side).concatenating(t))
     }
 }
