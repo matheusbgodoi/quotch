@@ -35,14 +35,23 @@ API de uso do provedor por HTTPS (URLSession). Nenhuma aba, nenhuma janela, nenh
 - [x] Leitura em segundo plano, SEM abrir aba/janela (confirmado: nenhum `osascript`).
 - [x] Claude Pedro (Chrome Profile 1) e Letícia (Chrome Profile 2) — sessão + semanal, com nome/e-mail.
 - [x] Cursor com DOIS anéis: Cursor Models (auto) + Other Models (api).
-- [x] Grokbot: provedor novo, logo próprio, registrável pelo seletor; lê grok-4/grok-3 por dia.
+- [x] Grokbot: provedor novo, logo próprio (o mascote fantasma do app "Grok Bot" instalado, extraído
+      do `.icns` do bundle — não a marca da x.ai), registrável pelo seletor; lê grok-4/grok-3 por dia.
 - [x] Codex 23% (CLI). 
 - [x] Parser do `Cookies.binarycookies` do Safari reescrito, com verificação de limites (não crasha mais).
 - [x] Cotas honestas: sem número falso; "—" até ler de verdade.
+- [x] Corrida de layout no launch (`main.swift`): a primeira `apply()` do bridge rodava antes de
+      `onSlotCountChange` ser ligado, então a janela ficava do tamanho do modelo de demonstração
+      (5 provedores) até outro evento reajustar. Invisível enquanto o usuário tinha exatamente 5
+      provedores (igual ao mock); com o 6º (Grokbot), o último da lista ficava fora da silhueta —
+      presente na config e lido normalmente, só não desenhado. Corrigido com um `scheduleRelayout()`
+      explícito após ligar os closures.
+- [x] Instalação do zero documentada no README: o release não é notarizado pela Apple, então precisa
+      de clique-direito → Abrir na primeira vez (Gatekeeper); e o segundo prompt do macOS — Keychain
+      "Chrome Safe Storage", separado do Full Disk Access — também está explicado.
 
 ## Pendente / notas
 - [ ] Antigravity: a ponte local responde 200 só com o app Antigravity aberto; fechado, cai p/ nuvem (401) e fica stale.
 - [ ] Flow: `aisandbox-pa.googleapis.com/v1/credits` passou a devolver 401 mesmo com token de sessão válido (mudança do Google, set/2026). A sessão do Safari ainda dá `access_token`; falta o endpoint novo de créditos. Anel mostra o último valor.
 - [ ] Identidade (nome/e-mail) do Grokbot e do Cursor via Safari é opcional; hoje mostra o nome do provedor.
-- [ ] Onboarding de 1ª vez explicando o passo único do Full Disk Access.
-- [ ] Distribuição: build assinado com Evie Dev não é notarizado; em outra máquina, abrir com clique-direito › Abrir.
+- [ ] Distribuição: build assinado com Evie Dev não é notarizado; em outra máquina, abrir com clique-direito › Abrir (documentado no README).
