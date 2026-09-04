@@ -433,7 +433,7 @@ enum Providers {
 
     /// Identidade (e-mail/nome/plano) de uma conta lida de um navegador.
     static func browserIdentity(kind: ProviderKind, source: BrowserSource) async -> AccountIdentity? {
-        let ck: String = { if case .chromium(let k, let p) = source { return "\(k):\(p)" }; return "safari" }()
+        let ck = "\(kind.rawValue):\(source.cacheKey)"
         if let c = browserIdentityCache[ck] { return c }
         // Tudo por cookie + HTTP em segundo plano — nada abre na tela.
         switch kind {
@@ -452,7 +452,7 @@ enum Providers {
             browserIdentityCache[ck] = id
             return id
         case .flow:
-            let id = flowIdentity()
+            let id = flowIdentity(source: source)
             if let id { browserIdentityCache[ck] = id }
             return id
         default: return nil
@@ -487,21 +487,33 @@ enum Providers {
         return UsageReading(fraction: outer, inner: inner, windows: windows, fetchedAt: Date())
     }
 
-    // MARK: Flow — via Safari (sessão viva do usuário). Pega o access_token de
-    // labs.google/fx/api/auth/session (AppleScript) e lê /v1/credits com Referer.
-    // Token cacheado até expirar → o Safari só é tocado ~1x/hora.
-    private static var flowToken: (token: String, email: String?, name: String?, exp: Date)?
-    static func flowSafari() async throws -> UsageReading {
-        let tok = try await flowAccessToken()
-        var req = URLRequest(url: URL(string: "https://aisandbox-pa.googleapis.com/v1/credits")!)
+    // MARK: Flow — via a sessão viva do navegador do usuário. Pega o access_token
+    // de labs.google/fx/api/auth/session e lê /v1/credits com a chave pública usada
+    // pelo próprio cliente web. O token fica em memória somente até expirar.
+    private static let flowAPIKey = "AIzaSyBtrm0o5ab1c-Ec8ZuLcGt3oJAA5VWt3pY"
+    private static var flowTokens: [String: (token: String, email: String?, name: String?, exp: Date)] = [:]
+
+    static func flowBrowser(source: BrowserSource) async throws -> UsageReading {
+        let tok = try await flowAccessToken(source: source)
+        // This is the exact endpoint used by the current Flow web client. The API
+        // key is required even when a valid OAuth bearer token is present.
+        var components = URLComponents(string: "https://aisandbox-pa.googleapis.com/v1/credits")!
+        components.queryItems = [URLQueryItem(name: "key", value: flowAPIKey)]
+        var req = URLRequest(url: components.url!)
         req.setValue("Bearer \(tok.token)", forHTTPHeaderField: "Authorization")
         req.setValue("https://labs.google/", forHTTPHeaderField: "Referer")
         req.timeoutInterval = 12
         let (data, resp) = try await URLSession.shared.data(for: req)
-        guard (resp as? HTTPURLResponse)?.statusCode == 200,
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+        QTLog.write("Flow credits HTTP \(code) bytes=\(data.count) source=\(source.cacheKey)")
+        guard code == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let reading = parseFlowCredits(j) else { throw ProviderError.badResponse("Flow credits") }
         return reading
+    }
+
+    static func flowSafari() async throws -> UsageReading {
+        try await flowBrowser(source: .safari)
     }
 
     /// Converte o payload capturado pela própria página do Flow em uma cota mensal.
@@ -534,10 +546,13 @@ enum Providers {
         }()
         guard let total = allowance, total > 0 else { return nil }
         let usableRemaining = min(max(remaining, 0), total)
-        let fraction = min(max((total - usableRemaining) / total, 0), 1)
+        // Flow is intentionally shown as quota LEFT (unlike time-window providers,
+        // which expose usage). This makes the ring start full and shrink as the
+        // monthly credit balance is consumed.
+        let fraction = min(max(usableRemaining / total, 0), 1)
         let qualifier = estimated ? "estimated monthly credits" : "monthly credits"
         let confidence = estimated ? "estimated" : "verified"
-        var windows = [QuotaWindow(label: "\(Int(usableRemaining)) / \(Int(total)) \(qualifier)", resetText: "Monthly plan · \(confidence)", fraction: fraction)]
+        var windows = [QuotaWindow(label: "\(Int(usableRemaining)) / \(Int(total)) \(qualifier) left", resetText: "Monthly plan · \(confidence)", fraction: fraction)]
         if let topUp = number("topUpCredits"), topUp > 0 {
             windows.append(QuotaWindow(label: "\(Int(topUp)) top-up credits", resetText: "Purchased credits", fraction: 0))
         } else if let credits, credits > usableRemaining {
@@ -545,17 +560,18 @@ enum Providers {
         }
         return UsageReading(fraction: fraction, windows: windows, fetchedAt: Date())
     }
-    static func flowIdentity() -> AccountIdentity? {
-        guard let t = try? flowAccessTokenSync() else { return nil }
+    static func flowIdentity(source: BrowserSource = .safari) -> AccountIdentity? {
+        guard let t = try? flowAccessTokenSync(source: source) else { return nil }
         return AccountIdentity(email: t.email, name: t.name, plan: "Flow")
     }
-    /// Token do Flow lido dos COOKIES do Safari (labs.google) via URLSession — não abre o Safari.
-    /// Requer Full Disk Access (o Safari guarda os cookies num container protegido pelo macOS).
-    private static func flowAccessToken() async throws -> (token: String, email: String?, name: String?, exp: Date) {
-        if let c = flowToken, c.exp > Date().addingTimeInterval(60) { return c }
-        let cookies = BrowserCookies.cookies(host: "labs.google", source: .safari)
+    /// Token do Flow lido dos cookies de labs.google via URLSession — não abre o navegador.
+    /// Requer Full Disk Access porque os navegadores protegem seus bancos de cookies.
+    private static func flowAccessToken(source: BrowserSource) async throws -> (token: String, email: String?, name: String?, exp: Date) {
+        let sourceKey = source.cacheKey
+        if let c = flowTokens[sourceKey], c.exp > Date().addingTimeInterval(60) { return c }
+        let cookies = BrowserCookies.cookies(host: "labs.google", source: source)
         guard !cookies.isEmpty else {
-            throw ProviderError.badResponse(BrowserAccess.hasFullDiskAccess() ? "Flow: entre no labs.google pelo Safari" : "Flow: precisa de Acesso Total ao Disco")
+            throw ProviderError.badResponse(BrowserAccess.hasFullDiskAccess() ? "Flow: sign in at labs.google in this browser" : "Flow: needs Full Disk Access")
         }
         let header = cookies.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
         var req = URLRequest(url: URL(string: "https://labs.google/fx/api/auth/session")!)
@@ -570,15 +586,15 @@ enum Providers {
         let user = j["user"] as? [String: Any]
         let exp = (j["expires"] as? String).flatMap { isoDate($0) } ?? Date().addingTimeInterval(3000)
         let c = (token: tok, email: user?["email"] as? String, name: user?["name"] as? String, exp: exp)
-        flowToken = c
+        flowTokens[sourceKey] = c
         return c
     }
     /// Versão síncrona (para identidade), reaproveita o cache e faz a leitura de cookie bloqueante.
-    private static func flowAccessTokenSync() throws -> (token: String, email: String?, name: String?, exp: Date) {
-        if let c = flowToken, c.exp > Date().addingTimeInterval(60) { return c }
+    private static func flowAccessTokenSync(source: BrowserSource) throws -> (token: String, email: String?, name: String?, exp: Date) {
+        if let c = flowTokens[source.cacheKey], c.exp > Date().addingTimeInterval(60) { return c }
         let sem = DispatchSemaphore(value: 0)
         var result: (token: String, email: String?, name: String?, exp: Date)?
-        Task { result = try? await flowAccessToken(); sem.signal() }
+        Task { result = try? await flowAccessToken(source: source); sem.signal() }
         _ = sem.wait(timeout: .now() + 14)
         guard let r = result else { throw ProviderError.badResponse("Flow: token indisponível") }
         return r
@@ -738,6 +754,8 @@ final class RefreshCoordinator {
                 let r: UsageReading
                 if slot.kind == .grok {
                     r = try await Providers.grokBot()
+                } else if slot.kind == .flow, let src = BrowserSource.parse(slot.chromeProfile) {
+                    r = try await Providers.flowBrowser(source: src)
                 } else if slot.chromeProfile == "web" {
                     r = try await WebSession.shared.read(accountID: slot.id, kind: slot.kind)
                 } else if slot.kind == .flow {

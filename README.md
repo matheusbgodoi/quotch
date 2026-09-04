@@ -29,9 +29,10 @@ full breakdown: every quota window, when it resets, who the account belongs to.
 | **Cursor** | Cursor Models + Other Models rings | browser session → `cursor.com/api/usage-summary` |
 | **Grokbot** | weekly limit | installed Grok Bot app → `GetSandUsageStatus` |
 | **Antigravity** | daily quota | local bridge to the running Antigravity app |
-| **Google Flow** | monthly credits used | isolated Flow web session; remaining credits are measured against the plan's monthly allowance |
+| **Google Flow** | monthly credits left | signed-in browser session; remaining subscription credits are measured against the plan's monthly allowance |
 
-Every connected account is refreshed **in the background**. Flow only opens its isolated window when you sign in.
+Every connected account is refreshed **in the background**. Flow uses a normal browser session because Google blocks embedded sign-in.
+Its ring starts full and shrinks with the remaining monthly subscription credits; placeholder credit numbers are never shown as real usage.
 
 Quotch never asks for a password. It reads logins the tools already keep on your Mac, and shows the account's
 name, e-mail (can be hidden) and plan so you always know which account a ring is.

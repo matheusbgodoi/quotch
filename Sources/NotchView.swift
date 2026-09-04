@@ -44,6 +44,10 @@ struct RingCell: View, Equatable {
     }
     private var isStale: Bool { if case .stale = slot.state { return true }; return false }
     private var percent: Int { Int(((fraction ?? 0) * 100).rounded()) }
+    private var severity: Double {
+        guard let fraction else { return 0 }
+        return slot.kind == .flow ? 1 - fraction : fraction
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -55,7 +59,7 @@ struct RingCell: View, Equatable {
 
                 RingArc(fraction: fraction ?? 0)
                     .stroke(style: StrokeStyle(lineWidth: NQ.arcLineWidth, lineCap: .round))
-                    .foregroundStyle(NQ.band(fraction ?? 0))   // foregroundStyle interpola; stroke(Color) nao
+                    .foregroundStyle(NQ.band(severity))   // Flow is quota left; the other rings are usage.
                     .frame(width: metrics.ringDiameter - NQ.trackLineWidth,
                            height: metrics.ringDiameter - NQ.trackLineWidth)
 
@@ -241,7 +245,7 @@ extension NotchRootView {
             let cardLeft: CGFloat = vertical ? (layout.edge == .right ? -(layout.stripThickness + 10) : layout.stripThickness + 10)
                                              : min(max(ringCenter - NQ.hoverCardWidth / 2, 8), layout.windowFrame.width - NQ.hoverCardWidth - 8)
             HoverCard(slot: slot,
-                      windows: model.readings[slot.id]?.windows ?? NotchRootView.demoWindows(for: slot),
+                      windows: model.readings[slot.id]?.windows ?? (QuotchDemo ? NotchRootView.demoWindows(for: slot) : []),
                       sessionTitle: QuotchDemo ? slot.plan : [model.showEmails ? slot.email : slot.displayName, slot.plan].compactMap { $0 }.joined(separator: " · "),
                       sessionSubtitle: [stack.count > 1 ? "Account \(stack.frontIndex + 1) of \(stack.count) · scroll or tap the dots to switch" : nil, Vault.has(slot.id) ? "Reads with the login captured for this account" : nil].compactMap { $0 }.joined(separator: "\n"),
                       sessionStatus: nil, sessionAge: nil,

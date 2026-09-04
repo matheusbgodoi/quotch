@@ -16,7 +16,7 @@ enum NQSettings {
     static let authorLink: String? = "https://www.linkedin.com/in/matheusgodoi-engbio/"
 
     static var version: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.4"
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.4.1"
     }
 
     static let emptyTitle = "Connect an assistant to get started"
@@ -413,7 +413,7 @@ struct AddRemoveBar: View {
                 Button("From the Cursor app") { store.addAccount(kind: .cursor) }
             }
         case .flow:
-            Button("Sign in with Flow…") { signInWeb(.flow) }
+            Button("From a signed-in browser…") { browserPick = CaptureRequest(kind: .flow) }
         case .codex:
             Button("Codex (from the CLI)") { store.addAccount(kind: .codex) }
         case .antigravity:

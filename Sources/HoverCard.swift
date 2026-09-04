@@ -27,7 +27,19 @@ struct HoverCard: View {
             }
             .padding(.bottom, 10)
 
+            if windows.isEmpty {
+                Text(slot.kind == .flow
+                     ? "No credit reading yet. Click the ring to reconnect Flow."
+                     : "No usage reading yet. Click the ring to refresh.")
+                    .font(.system(size: 12))
+                    .foregroundStyle(NQ.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.bottom, 9.5)
+            }
+
             ForEach(windows, id: \.id) { (w: QuotaWindow) in
+                let severity = slot.kind == .flow ? 1 - w.fraction : w.fraction
+                let showsMeter = slot.kind != .flow || w.resetText.hasPrefix("Monthly plan")
                 HStack {
                     Text(w.label).font(.system(size: 12, weight: .medium))
                         .foregroundStyle(NQ.onSurface)
@@ -35,22 +47,24 @@ struct HoverCard: View {
                     Text(w.resetText).font(.system(size: 12))
                         .foregroundStyle(NQ.secondary)          // #808080
                 }
-                .padding(.bottom, 8)
+                .padding(.bottom, showsMeter ? 8 : 9.5)
 
-                GeometryReader { g in
-                    ZStack(alignment: .leading) {
-                        Capsule().fill(NQ.barTrack)             // #2D2D2D
-                        Capsule().fill(NQ.band(w.fraction))
-                            .frame(width: max(0, g.size.width * w.fraction))
+                if showsMeter {
+                    GeometryReader { g in
+                        ZStack(alignment: .leading) {
+                            Capsule().fill(NQ.barTrack)             // #2D2D2D
+                            Capsule().fill(NQ.band(severity))
+                                .frame(width: max(0, g.size.width * w.fraction))
+                        }
                     }
-                }
-                .frame(height: 4)
-                .padding(.bottom, 9)
+                    .frame(height: 4)
+                    .padding(.bottom, 9)
 
-                Text("\(Int((w.fraction * 100).rounded()))% Used")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(NQ.onSurface)
-                    .padding(.bottom, w.id == windows.last?.id ? 9.5 : 11)
+                    Text("\(Int((w.fraction * 100).rounded()))% \(slot.kind == .flow ? "Left" : "Used")")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(NQ.onSurface)
+                        .padding(.bottom, w.id == windows.last?.id ? 9.5 : 11)
+                }
             }
 
             if let t = sessionTitle {

@@ -334,7 +334,7 @@ struct AppConfig: Codable, Equatable {
 // MARK: - Migração de schema
 
 enum ConfigMigration {
-    static let currentVersion = 3
+    static let currentVersion = 4
 
     /// Migra o JSON cru antes de decodificar. Cada passo é v→v+1 e só mexe no dicionário,
     /// para nunca depender do formato ATUAL do struct (que continua mudando).
@@ -345,6 +345,7 @@ enum ConfigMigration {
             switch v {
             case 1:  root = v1_to_v2(root)
             case 2:  root = v2_to_v3(root)
+            case 3:  root = v3_to_v4(root)
             default: break
             }
             v += 1
@@ -385,6 +386,21 @@ enum ConfigMigration {
         if var accounts = root["accounts"] as? [[String: Any]] {
             for i in accounts.indices where accounts[i]["kind"] as? String == ProviderKind.grok.rawValue {
                 accounts[i].removeValue(forKey: "chromeProfile")
+            }
+            root["accounts"] = accounts
+        }
+        return root
+    }
+
+    /// Google's OAuth refuses embedded WKWebView sign-in. Existing Flow accounts
+    /// move to the already signed-in Safari session, which can be refreshed silently.
+    private static func v3_to_v4(_ input: [String: Any]) -> [String: Any] {
+        var root = input
+        if var accounts = root["accounts"] as? [[String: Any]] {
+            for i in accounts.indices
+            where accounts[i]["kind"] as? String == ProviderKind.flow.rawValue
+                && accounts[i]["chromeProfile"] as? String == "web" {
+                accounts[i]["chromeProfile"] = "safari"
             }
             root["accounts"] = accounts
         }

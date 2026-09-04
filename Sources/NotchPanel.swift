@@ -320,8 +320,10 @@ final class NotchWindowController {
             case "pct":   ConfigStore.shared.config.showPercentages = (arg ?? 1) == 1
             case "group": ConfigStore.shared.config.groupByCategory = (arg ?? 1) == 1
             case "flowsignin":
-                let id = ConfigStore.shared.addAccount(kind: .flow, chromeProfile: "web")
-                WebSession.shared.signIn(accountID: id, kind: .flow) { ok in QTLog.write("flow signin ok=\(ok)"); NotificationCenter.default.post(name: .quotchRefresh, object: nil) }
+                _ = ConfigStore.shared.addAccount(kind: .flow, chromeProfile: "safari")
+                NotificationCenter.default.post(name: .quotchRefresh, object: nil)
+            case "flowreconnect":
+                NSWorkspace.shared.open(ProviderKind.flow.manageURL)
             case "addsrc":
                 if parts.count > 2 {
                     let src = parts[2...].joined(separator: " ")

@@ -58,6 +58,13 @@ enum BrowserSource {
         let key = String(s[s.startIndex..<i]); let prof = String(s[s.index(after: i)...])
         return .chromium(browserKey: key, profile: prof)
     }
+
+    var cacheKey: String {
+        switch self {
+        case .safari: return "safari"
+        case .chromium(let browserKey, let profile): return "\(browserKey):\(profile)"
+        }
+    }
 }
 
 enum BrowserCookies {
