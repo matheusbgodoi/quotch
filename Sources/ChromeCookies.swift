@@ -118,6 +118,17 @@ enum ChromiumCookies {
         if buf.count > 32, !buf.prefix(8).allSatisfy({ $0 >= 0x20 && $0 < 0x7f }) { buf.removeFirst(32) }
         return String(data: buf, encoding: .utf8)
     }
+
+    /// Descriptografa um valor salvo pelo `safeStorage` do Electron no macOS.
+    /// O formato é o mesmo `v10` usado pelos cookies Chromium. É usado pelo
+    /// Grok Bot para manter o token de sessão no arquivo `sand-secrets.json`.
+    static func decryptSafeStorage(_ encoded: String, service: String) -> String? {
+        guard let encrypted = Data(base64Encoded: encoded),
+              encrypted.count > 3,
+              encrypted.prefix(3) == Data("v10".utf8),
+              let key = aesKey(service: service) else { return nil }
+        return decrypt(Data(encrypted.dropFirst(3)), key: key)
+    }
 }
 
 /// Compat: chamadas antigas por "perfil do Chrome".

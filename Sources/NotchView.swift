@@ -264,14 +264,13 @@ extension NotchRootView {
         switch slot.kind {
         case .claude: return [QuotaWindow(label: "Current session", resetText: "Resets in 3 hr 37 min", fraction: f),
                               QuotaWindow(label: "All models", resetText: "Resets Tue 14:49", fraction: f * 0.6),
-                              QuotaWindow(label: "Opus", resetText: "Resets Tue 14:49", fraction: f * 0.3)]
+                              QuotaWindow(label: "Fable", resetText: "Resets Tue 14:49", fraction: f * 0.3)]
         case .codex:  return [QuotaWindow(label: "Current session", resetText: "Resets in 2 hr", fraction: f),
                               QuotaWindow(label: "Weekly limit", resetText: "Resets Sat 09:00", fraction: f * 0.5)]
         case .cursor: return [QuotaWindow(label: "Included usage", resetText: "Resets 30 Sep", fraction: f)]
         case .antigravity: return [QuotaWindow(label: "Daily quota", resetText: "Resets 00:00", fraction: f)]
-        case .flow:   return [QuotaWindow(label: "Credits", resetText: "Renews 30 Sep", fraction: f)]
-        case .grok:   return [QuotaWindow(label: "grok-4 today", resetText: "Resets 00:00", fraction: f),
-                              QuotaWindow(label: "grok-3 today", resetText: "Resets 00:00", fraction: f * 0.4)]
+        case .flow:   return [QuotaWindow(label: "760 / 1000 monthly credits", resetText: "Monthly plan", fraction: f)]
+        case .grok:   return [QuotaWindow(label: "Weekly limit", resetText: "Resets Sat 09:00", fraction: f)]
         }
     }
 }

@@ -8,7 +8,7 @@
 1. Download `Quotch.dmg` from [Releases](../../releases/latest), open it, and drag **Quotch** onto **Applications**.
 2. **First launch only** — the release isn't notarised by Apple, so Gatekeeper blocks a plain double-click the first time. Instead: **Control-click (or right-click) Quotch in Applications → Open → Open** in the dialog that appears. If macOS shows no "Open" button at all, go to **System Settings → Privacy & Security**, scroll to the bottom, and click **Open Anyway** next to Quotch. You only do this once — every launch after that works normally.
 3. Quotch lives outside the Dock. Look for a thin black strip at the edge of your screen, or reopen it from Applications to bring up Settings.
-4. Add an account from **Settings → +** for each provider. Browser-based providers (Claude, Cursor, Grokbot, Flow) ask for **Full Disk Access** once — Settings tells you exactly when and shows a button straight to the right pane. Grant it, reopen Quotch, and every browser account you add from then on reads silently.
+4. Add an account from **Settings → +** for each provider. Quotch guides each connection: Flow signs in inside its own window, Grokbot reads the installed Grok Bot app, and browser profiles may ask for **Full Disk Access** once.
 
 ## What it does
 A thin black strip hugs the edge of your screen. Hover it and it opens into rings — one per AI provider — with the
@@ -24,14 +24,14 @@ full breakdown: every quota window, when it resets, who the account belongs to.
 ## Providers
 | | Reads | How |
 |---|---|---|
-| **Claude** | session + weekly rings | browser session (any Chrome profile / Safari) → `claude.ai/api/…/usage`, or Claude Code's Keychain login |
+| **Claude** | session + weekly rings, including Fable | private web session, browser session, or Claude Code's Keychain login |
 | **Codex** (ChatGPT) | weekly limit | local CLI rollout files — no network |
 | **Cursor** | Cursor Models + Other Models rings | browser session → `cursor.com/api/usage-summary` |
-| **Grokbot** | grok-4 + grok-3 daily rings | browser session → `grok.com/rest/rate-limits` |
+| **Grokbot** | weekly limit | installed Grok Bot app → `GetSandUsageStatus` |
 | **Antigravity** | daily quota | local bridge to the running Antigravity app |
-| **Google Flow** | credits (generation) | browser session (Safari) → `labs.google` credits |
+| **Google Flow** | monthly credits used | isolated Flow web session; remaining credits are measured against the plan's monthly allowance |
 
-Every browser account is read **in the background** — Quotch never opens a tab or a window (see below).
+Every connected account is refreshed **in the background**. Flow only opens its isolated window when you sign in.
 
 Quotch never asks for a password. It reads logins the tools already keep on your Mac, and shows the account's
 name, e-mail (can be hidden) and plan so you always know which account a ring is.
@@ -56,9 +56,9 @@ Right-click the strip for the menu (Keep open · Refresh now · Settings… · O
 
 ## Reading accounts from your browser
 
-Quotch reads a provider straight from the browser where you are already signed in — no login inside the app, and **nothing ever opens on screen**. It reads the session cookie the browser already stores, calls the provider's own usage API over HTTPS in the background, and paints the ring. Add an account from **Settings → +**, pick the browser and profile, and it starts reading.
+For providers connected through a browser profile, Quotch reads the session already saved there and paints the ring without opening a tab. Add an account from **Settings → +**, pick the browser and profile, and it starts reading.
 
-**One-time setup: Full Disk Access.** macOS keeps every browser's cookies in a protected folder, so a background reader needs Full Disk Access. Grant it once and every browser account — across all providers and profiles — reads silently forever:
+**One-time setup: Full Disk Access.** macOS keeps every browser's cookies in a protected folder, so a background reader needs Full Disk Access. Grant it once and every browser-profile account reads silently from then on:
 
 1. System Settings → Privacy & Security → Full Disk Access.
 2. Add **Quotch** with the **+** and switch it on.
@@ -68,7 +68,7 @@ Chrome profiles are read per profile (Pedro, Letícia, …). Safari is read from
 
 **A second, separate prompt for Chrome only:** the first time Quotch reads a Chrome profile, macOS asks *"Quotch wants to access the key 'Chrome Safe Storage' in your keychain"* — that's the login keychain password, and it's how Chrome itself encrypts your cookies. Choose **Always Allow** so it only asks once. This is unrelated to your Chrome password or your Google account; Quotch never sees either.
 
-Sources that read from the desktop tool instead of a browser need no Full Disk Access: **Claude Code** (Keychain login), **Codex** (local CLI files), **Antigravity** (a local bridge to the running app).
+Sources that read from the desktop tool instead of a browser need no Full Disk Access: **Claude Code** (Keychain login), **Codex** (local CLI files), **Antigravity** (a local bridge to the running app), and **Grok Bot** (its own Keychain login). Flow keeps a separate web session inside Quotch.
 
 > The release build is signed with a stable local identity, so the Full Disk Access grant survives app updates — you grant it once, not on every new version.
 

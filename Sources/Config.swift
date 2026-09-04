@@ -116,7 +116,7 @@ extension ProviderKind {
         case .cursor:      return "Sign in to Cursor in the editor"
         case .antigravity: return "Sign in to Antigravity to read your usage"
         case .flow:        return "Sign in with Google Flow"
-        case .grok:        return "Sign in to Grok in your browser"
+        case .grok:        return "Sign in to Grok Bot to read your weekly usage"
         }
     }
 }
@@ -334,7 +334,7 @@ struct AppConfig: Codable, Equatable {
 // MARK: - Migração de schema
 
 enum ConfigMigration {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     /// Migra o JSON cru antes de decodificar. Cada passo é v→v+1 e só mexe no dicionário,
     /// para nunca depender do formato ATUAL do struct (que continua mudando).
@@ -344,6 +344,7 @@ enum ConfigMigration {
         while v < currentVersion {
             switch v {
             case 1:  root = v1_to_v2(root)
+            case 2:  root = v2_to_v3(root)
             default: break
             }
             v += 1
@@ -376,6 +377,19 @@ enum ConfigMigration {
         }
         return root
     }
+
+    /// Grokbot deixou de usar uma sessão do navegador: a cota semanal vem do
+    /// app Grok Bot. Remove a origem antiga para a conta aparecer como local.
+    private static func v2_to_v3(_ input: [String: Any]) -> [String: Any] {
+        var root = input
+        if var accounts = root["accounts"] as? [[String: Any]] {
+            for i in accounts.indices where accounts[i]["kind"] as? String == ProviderKind.grok.rawValue {
+                accounts[i].removeValue(forKey: "chromeProfile")
+            }
+            root["accounts"] = accounts
+        }
+        return root
+    }
 }
 
 // MARK: - Store
@@ -394,8 +408,12 @@ final class ConfigStore: ObservableObject {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
+        let raw = defaults.data(forKey: ConfigStore.key)
         self.config = ConfigStore.load(from: defaults)
-        if defaults.data(forKey: ConfigStore.key) == nil {
+        let storedVersion = raw.flatMap { data in
+            (try? JSONSerialization.jsonObject(with: data) as? [String: Any])?["schemaVersion"] as? Int
+        }
+        if raw == nil || storedVersion != ConfigMigration.currentVersion {
             save()
         }
     }

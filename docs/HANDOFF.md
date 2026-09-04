@@ -28,6 +28,10 @@ lista janelas do owner "Quotch" com layer 25 via CGWindowListCopyWindowInfo).
 - Clique numa célula = atualizar a cota; abrir o site só pelo menu de botão direito (pedido do usuário).
 - Engrenagem: escondida atrás da ponta; no hover a faixa cresce 58 pt e o botão redondo aparece (spring reveal 0,36/0,70).
 - Claude via Keychain é opt-in (toggle) porque o macOS abre diálogo.
+- Grokbot lê o limite semanal do app Grok Bot via Electron safeStorage; o macOS pede acesso ao item
+  `Grok Bot Safe Storage` uma vez. Não usar as cotas diárias do chat em `grok.com`.
+- Flow usa uma WKWebView isolada e calcula uso mensal com `subscriptionCredits` + tier do plano;
+  `credits` sozinho é saldo e nunca deve ser usado como o próprio denominador.
 - 1ª conta de cada provedor = "viva" (credencial da ferramenta dona); as demais ainda são demonstração até existir o cofre (ver TASKS).
 
 ## Cofre (multi-conta real)

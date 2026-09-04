@@ -77,7 +77,6 @@ extension ProviderKind {
         switch self {
         case .claude: return ("claude.ai", "sessionKey")
         case .cursor: return ("cursor.com", "WorkosCursorSessionToken")
-        case .grok:   return ("grok.com", "sso")
         default: return nil
         }
     }

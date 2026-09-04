@@ -30,7 +30,7 @@ final class WebSession: NSObject {
         let cfg = WKWebViewConfiguration()
         if #available(macOS 14.0, *) { cfg.websiteDataStore = WKWebsiteDataStore(forIdentifier: id) }
         if kind == .flow {
-            let js = "(function(){const g=(t)=>{try{const j=JSON.parse(t);if(/credit/i.test(JSON.stringify(j))){window.__nqC=window.__nqC||[];window.__nqC.push(j);}}catch(e){}};const of=window.fetch;window.fetch=function(){return of.apply(this,arguments).then(r=>{try{r.clone().text().then(g);}catch(e){}return r;});};})();"
+            let js = "(function(){const g=(t)=>{try{const j=JSON.parse(t.replace(/^\\)\\]}'\\s*/,''));if(/credit/i.test(JSON.stringify(j))){window.__nqC=window.__nqC||[];window.__nqC.push(j);}}catch(e){}};const of=window.fetch;window.fetch=function(){return of.apply(this,arguments).then(r=>{try{r.clone().text().then(g);}catch(e){}return r;});};const oo=XMLHttpRequest.prototype.open,os=XMLHttpRequest.prototype.send;XMLHttpRequest.prototype.open=function(){this.__nqTrack=true;return oo.apply(this,arguments);};XMLHttpRequest.prototype.send=function(){if(this.__nqTrack)this.addEventListener('load',()=>g(this.responseText));return os.apply(this,arguments);};})();"
             cfg.userContentController.addUserScript(WKUserScript(source: js, injectionTime: .atDocumentStart, forMainFrameOnly: false))
         }
         let wv = WKWebView(frame: NSRect(x: 0, y: 0, width: 1000, height: 760), configuration: cfg)
@@ -130,18 +130,24 @@ final class WebSession: NSObject {
     private func readFlow(_ wv: WKWebView) async throws -> UsageReading {
         for _ in 0..<8 {
             let js = """
-            let rem=null,tot=null;for(const j of (window.__nqC||[])){const walk=(o)=>{if(o&&typeof o==='object'){for(const k in o){
-            if(/remainingCredits|creditsRemaining|credit_count|remaining/i.test(k)&&typeof o[k]==='number')rem=o[k];
-            if(/totalCredits|creditLimit|monthlyCredits|limit|total/i.test(k)&&typeof o[k]==='number')tot=o[k];walk(o[k]);}}};walk(j);}
-            if(rem===null){const m=(document.body.innerText||'').match(/([0-9][0-9.,]{1,7})\\s*Cr[eé]dit/i);if(m)rem=parseInt(m[1].replace(/[.,]/g,''));}
-            return JSON.stringify({rem,tot});
+            let credits=null,subscriptionCredits=null,topUpCredits=null,explicitTotal=null,serviceTier=null,paygateTier=null,sku=null;
+            for(const j of (window.__nqC||[])){const walk=(o)=>{if(!o||typeof o!=='object')return;for(const k in o){const v=o[k];
+              if(k==='credits'&&typeof v==='number')credits=v;
+              if(k==='subscriptionCredits'&&typeof v==='number')subscriptionCredits=v;
+              if(k==='topUpCredits'&&typeof v==='number')topUpCredits=v;
+              if(/^(totalCredits|creditLimit|monthlyCredits|monthlyAllowance)$/i.test(k)&&typeof v==='number')explicitTotal=v;
+              if(k==='serviceTier'&&typeof v==='string')serviceTier=v;
+              if(/^(paygateTier|userPaygateTier)$/i.test(k)&&typeof v==='string')paygateTier=v;
+              if(k==='sku'&&typeof v==='string')sku=v;
+              walk(v);
+            }};walk(j);}
+            return JSON.stringify({credits,subscriptionCredits,topUpCredits,explicitTotal,serviceTier,paygateTier,sku,debugUrl:location.href,debugCaptured:(window.__nqC||[]).length});
             """
             if let out = try await wv.callAsyncJavaScript(js, contentWorld: .page) as? String,
-               let d = out.data(using: .utf8), let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-               let rem = j["rem"] as? Double {
-                let tot = (j["tot"] as? Double) ?? max(rem, 1)
-                let frac = tot > 0 ? max(0, tot-rem)/tot : 0
-                return UsageReading(fraction: frac, windows: [QuotaWindow(label:"Credits", resetText:"", fraction:frac)], fetchedAt: Date())
+               let d = out.data(using: .utf8),
+               let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any] {
+                QTLog.write("Flow web url=\(j["debugUrl"] as? String ?? "?") captured=\((j["debugCaptured"] as? NSNumber)?.intValue ?? 0)")
+                if let reading = Providers.parseFlowCredits(j) { return reading }
             }
             try? await sleep(1.0)
         }

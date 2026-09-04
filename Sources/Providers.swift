@@ -43,45 +43,87 @@ enum Providers {
             if let r = try? await antigravityBridge() { return r }
             return try await antigravity()
         case .flow: throw ProviderError.noCredential
-        case .grok: throw ProviderError.noCredential   // só via navegador (cookie)
+        case .grok: return try await grokBot()
         }
     }
 
-    // MARK: Grok — POST grok.com/rest/rate-limits com os cookies do navegador (sso/sso-rw).
-    // Anel de fora = grok-4 (o mais escasso), anel de dentro = grok-3. Reset diário.
-    static func grokBrowser(source: BrowserSource) async throws -> UsageReading {
-        let c = BrowserCookies.cookies(host: "grok.com", source: source)
-        guard c["sso"] != nil || c["sso-rw"] != nil else { throw ProviderError.noCredential }
-        let header = c.map { "\($0.key)=\($0.value)" }.joined(separator: "; ")
-        func rate(_ model: String) async -> (rem: Double, tot: Double, window: Double)? {
-            var req = URLRequest(url: URL(string: "https://grok.com/rest/rate-limits")!)
-            req.httpMethod = "POST"
-            req.setValue(header, forHTTPHeaderField: "Cookie")
-            req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            req.setValue("https://grok.com", forHTTPHeaderField: "Origin")
-            req.setValue("https://grok.com/", forHTTPHeaderField: "Referer")
-            req.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
-            req.httpBody = try? JSONSerialization.data(withJSONObject: ["requestKind": "DEFAULT", "modelName": model])
-            req.timeoutInterval = 12
-            guard let (d, resp) = try? await URLSession.shared.data(for: req),
-                  (resp as? HTTPURLResponse)?.statusCode == 200,
-                  let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
-                  let rem = (j["remainingQueries"] as? NSNumber)?.doubleValue,
-                  let tot = (j["totalQueries"] as? NSNumber)?.doubleValue else { return nil }
-            return (rem, tot, (j["windowSizeSeconds"] as? NSNumber)?.doubleValue ?? 86400)
+    // MARK: Grok Bot — cota semanal real do app instalado.
+    // O app (com.anysphere.sand) salva a conta no safeStorage do Electron e usa
+    // DashboardService/GetSandUsageStatus. Não é a cota diária do chat grok.com.
+    private static func grokBotSecret(_ key: String) -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Grok Bot/sand-secrets.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let accountsJSON = root["cursor-accounts"] as? String,
+              let accountsData = accountsJSON.data(using: .utf8),
+              let accounts = try? JSONSerialization.jsonObject(with: accountsData) as? [String: Any],
+              let active = accounts["active"] as? String,
+              let all = accounts["accounts"] as? [String: Any],
+              let account = all[active] as? [String: Any],
+              let encrypted = account[key] as? String else { return nil }
+        return ChromiumCookies.decryptSafeStorage(encrypted, service: "Grok Bot Safe Storage")
+    }
+
+    private static func grokBotMachineID() -> String? {
+        let url = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Grok Bot/sand-secrets.json")
+        guard let data = try? Data(contentsOf: url),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let encrypted = root["cursor-machine-id"] as? String else { return nil }
+        return ChromiumCookies.decryptSafeStorage(encrypted, service: "Grok Bot Safe Storage")
+    }
+
+    /// Mesmo checksum curto usado pelo cliente Grok Bot antes do machine id.
+    private static func grokBotChecksum(machineID: String) -> String {
+        let stamp = UInt64(floor(Date().timeIntervalSince1970 / 1000))
+        var bytes = (0..<6).map { shift in UInt8((stamp >> UInt64((5 - shift) * 8)) & 0xff) }
+        var previous: UInt8 = 165
+        for i in bytes.indices {
+            bytes[i] = (bytes[i] ^ previous) &+ UInt8(i)
+            previous = bytes[i]
         }
-        guard let g4 = await rate("grok-4") else { throw ProviderError.badResponse("Grok: sessão expirada") }
-        func label(_ r: (rem: Double, tot: Double, window: Double), _ name: String) -> String {
-            "\(Int(r.rem))/\(Int(r.tot)) \(name)"
+        let prefix = Data(bytes).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+        return prefix + machineID
+    }
+
+    static func grokBot() async throws -> UsageReading {
+        guard let token = grokBotSecret("cursor-access-token"),
+              let machineID = grokBotMachineID() else { throw ProviderError.noCredential }
+        var req = URLRequest(url: URL(string: "https://api2.cursor.sh/aiserver.v1.DashboardService/GetSandUsageStatus")!)
+        req.httpMethod = "POST"
+        req.httpBody = Data("{}".utf8)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(grokBotChecksum(machineID: machineID), forHTTPHeaderField: "x-cursor-checksum")
+        req.setValue("sand", forHTTPHeaderField: "x-cursor-client-type")
+        req.setValue("sand-desktop", forHTTPHeaderField: "x-cursor-client-source")
+        let app = Bundle(path: "/Applications/Grok Bot.app")
+        let version = app?.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0.39.0"
+        req.setValue(version, forHTTPHeaderField: "x-cursor-client-version")
+        req.setValue("prod", forHTTPHeaderField: "x-sand-box-namespace")
+        req.setValue("false", forHTTPHeaderField: "x-ghost-mode")
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("1", forHTTPHeaderField: "Connect-Protocol-Version")
+        req.setValue(UUID().uuidString.lowercased(), forHTTPHeaderField: "x-request-id")
+        req.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: req)
+        let code = (response as? HTTPURLResponse)?.statusCode ?? 0
+        QTLog.write("grokBot HTTP \(code) bytes=\(data.count)")
+        if code == 429 { throw ProviderError.rateLimited(60) }
+        guard code == 200,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let percent = (json["usagePercent"] as? NSNumber)?.doubleValue else {
+            throw ProviderError.http(code)
         }
-        let outer = g4.tot > 0 ? max(0, (g4.tot - g4.rem) / g4.tot) : 0
-        var windows = [QuotaWindow(label: label(g4, "grok-4 today"), resetText: "", fraction: outer)]
-        var inner: Double? = nil
-        if let g3 = await rate("grok-3"), g3.tot > 0 {
-            inner = max(0, (g3.tot - g3.rem) / g3.tot)
-            windows.append(QuotaWindow(label: label(g3, "grok-3 today"), resetText: "", fraction: inner!))
-        }
-        return UsageReading(fraction: outer, inner: inner, windows: windows, fetchedAt: Date())
+        let fraction = min(max(percent / 100, 0), 1)
+        let reset = isoDate(json["nextResetTimestampUtc"] as? String)
+        let plan = (json["grokPlanLabel"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let label = (plan?.isEmpty == false) ? "Weekly limit · \(plan!)" : "Weekly limit"
+        let window = QuotaWindow(label: label, resetText: resetText(reset), fraction: fraction)
+        return UsageReading(fraction: fraction, windows: [window], fetchedAt: Date())
     }
 
     // MARK: Cursor — GET usage-summary com Cookie WorkosCursorSessionToken=<authId>%3A%3A<token>
@@ -244,7 +286,7 @@ enum Providers {
             throw ProviderError.http(http?.statusCode ?? 0)
         }
         var windows: [QuotaWindow] = []
-        let labels = ["session": "Current session", "weekly_all": "All models", "weekly_opus": "Opus", "weekly_sonnet": "Sonnet"]
+        let labels = ["session": "Current session", "weekly_all": "All models", "weekly_scoped": "Fable", "weekly_fable": "Fable", "weekly_opus": "Opus", "weekly_sonnet": "Sonnet"]
         if let limits = r["limits"] as? [[String: Any]] {
             for l in limits {
                 guard let kind = l["kind"] as? String, let pct = l["percent"] as? Double,
@@ -420,7 +462,7 @@ enum Providers {
     /// Parser único de /usage do Claude (usado pelo webview e pelo Keychain).
     /// Anel de fora = janela de 5h (sessão); anel de dentro = semanal.
     static func parseClaudeUsage(_ j: [String: Any]) -> UsageReading {
-        let labels = ["five_hour":"Current session","session":"Current session","seven_day":"All models","weekly_all":"All models","weekly_scoped":"Opus","seven_day_opus":"Opus","seven_day_sonnet":"Sonnet"]
+        let labels = ["five_hour":"Current session","session":"Current session","seven_day":"All models","weekly_all":"All models","weekly_scoped":"Fable","weekly_fable":"Fable","seven_day_fable":"Fable","weekly_opus":"Opus","seven_day_opus":"Opus","seven_day_sonnet":"Sonnet"]
         var windows: [QuotaWindow] = []
         var byKind: [String: Double] = [:]
         if let limits = j["limits"] as? [[String: Any]] {
@@ -458,11 +500,50 @@ enum Providers {
         let (data, resp) = try await URLSession.shared.data(for: req)
         guard (resp as? HTTPURLResponse)?.statusCode == 200,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let credits = (j["credits"] as? Double) else { throw ProviderError.badResponse("Flow credits") }
-        let total = (j["subscriptionCredits"] as? Double) ?? max(credits, 1)
-        let used = total > 0 ? max(0, (total - credits) / total) : 0
-        let w = QuotaWindow(label: "\(Int(credits)) credits left", resetText: "", fraction: used)
-        return UsageReading(fraction: used, windows: [w], fetchedAt: Date())
+              let reading = parseFlowCredits(j) else { throw ProviderError.badResponse("Flow credits") }
+        return reading
+    }
+
+    /// Converte o payload capturado pela própria página do Flow em uma cota mensal.
+    /// `subscriptionCredits` é saldo (não o total original), então o denominador vem
+    /// do plano. Os valores refletem as faixas oficiais atuais do Google Flow.
+    static func parseFlowCredits(_ j: [String: Any]) -> UsageReading? {
+        func number(_ key: String) -> Double? { (j[key] as? NSNumber)?.doubleValue }
+        func string(_ key: String) -> String { (j[key] as? String ?? "").uppercased() }
+        let subscriptionRemaining = number("subscriptionCredits")
+        let credits = number("credits")
+        guard let remaining = subscriptionRemaining ?? credits else { return nil }
+
+        let planText = [string("sku"), string("paygateTier"), string("serviceTier")].joined(separator: " ")
+        // `credits` isolado também aparece na landing page em tabelas de preços;
+        // só é uma leitura de conta quando o payload traz saldo de assinatura ou tier.
+        guard subscriptionRemaining != nil || !planText.trimmingCharacters(in: .whitespaces).isEmpty || number("explicitTotal") != nil else { return nil }
+        var estimated = false
+        let allowance: Double? = {
+            if let explicit = number("explicitTotal"), explicit > 0 { return explicit }
+            if planText.contains("TIER2") || planText.contains("TIER_TWO") { return 25_000 }
+            if planText.contains("TIER1P5") { return 10_000 }
+            if planText.contains("TIER1") || planText.contains("TIER_ONE") || planText.contains("INTERMEDIATE") { return 1_000 }
+            if planText.contains("TIER0") || planText.contains("TIER_ZERO") { return 200 }
+            if planText.contains("ADVANCED") { estimated = true; return remaining > 10_000 ? 25_000 : 10_000 }
+            if planText.contains("ENTRY") && !planText.contains("NOT_PAID") { return 200 }
+            // Payloads antigos não traziam o plano: escolhe a menor faixa mensal
+            // oficial capaz de conter o saldo, sem usar o próprio saldo como total.
+            estimated = true
+            return [200.0, 1_000, 10_000, 25_000].first(where: { remaining <= $0 })
+        }()
+        guard let total = allowance, total > 0 else { return nil }
+        let usableRemaining = min(max(remaining, 0), total)
+        let fraction = min(max((total - usableRemaining) / total, 0), 1)
+        let qualifier = estimated ? "estimated monthly credits" : "monthly credits"
+        let confidence = estimated ? "estimated" : "verified"
+        var windows = [QuotaWindow(label: "\(Int(usableRemaining)) / \(Int(total)) \(qualifier)", resetText: "Monthly plan · \(confidence)", fraction: fraction)]
+        if let topUp = number("topUpCredits"), topUp > 0 {
+            windows.append(QuotaWindow(label: "\(Int(topUp)) top-up credits", resetText: "Purchased credits", fraction: 0))
+        } else if let credits, credits > usableRemaining {
+            windows.append(QuotaWindow(label: "\(Int(credits - usableRemaining)) extra credits", resetText: "Bonus or top-up", fraction: 0))
+        }
+        return UsageReading(fraction: fraction, windows: windows, fetchedAt: Date())
     }
     static func flowIdentity() -> AccountIdentity? {
         guard let t = try? flowAccessTokenSync() else { return nil }
@@ -610,7 +691,29 @@ final class RefreshCoordinator {
         guard let d = try? Data(contentsOf: Self.cacheURL),
               let all = try? JSONDecoder().decode([UUID: StoredReading].self, from: d) else { return }
         for (id, r) in all {
-            let reading = UsageReading(fraction: r.fraction, windows: r.windows.map { QuotaWindow(label: $0.label, resetText: $0.resetText, fraction: $0.fraction) }, fetchedAt: r.fetchedAt)
+            guard let kind = model.slots.first(where: { $0.id == id })?.kind else { continue }
+            // Não restaura formatos que esta versão substituiu: sem isso uma falha
+            // de autenticação deixaria as cotas antigas e incorretas pintadas.
+            if kind == .grok && !r.windows.contains(where: { $0.label.hasPrefix("Weekly limit") }) { continue }
+            if kind == .flow && !r.windows.contains(where: { $0.resetText.hasPrefix("Monthly plan ·") }) {
+                let legacy = r.windows.first
+                let oldRemaining = legacy?.label.hasSuffix("credits left") == true
+                    ? legacy?.label.split(separator: " ").first.flatMap { Double($0) }
+                    : nil
+                if let oldRemaining,
+                   let migrated = Providers.parseFlowCredits(["subscriptionCredits": oldRemaining]) {
+                    model.readings[id] = migrated
+                    model.setState(id, .stale(fraction: migrated.fraction))
+                }
+                continue
+            }
+            let windows = r.windows.map { stored -> QuotaWindow in
+                let legacyClaude = kind == .claude && (stored.label == "Opus" || stored.label == "Weekly Scoped")
+                return QuotaWindow(label: legacyClaude ? "Fable" : stored.label,
+                                   resetText: stored.resetText,
+                                   fraction: stored.fraction)
+            }
+            let reading = UsageReading(fraction: r.fraction, windows: windows, fetchedAt: r.fetchedAt)
             model.readings[id] = reading
             let stale = Date().timeIntervalSince(r.fetchedAt) > Providers.interval
             model.setState(id, stale ? .stale(fraction: r.fraction) : .reading(fraction: r.fraction))
@@ -633,16 +736,18 @@ final class RefreshCoordinator {
             defer { inFlight.remove(slot.id) }
             do {
                 let r: UsageReading
-                if slot.kind == .flow {
-                    r = try await Providers.flowSafari()
+                if slot.kind == .grok {
+                    r = try await Providers.grokBot()
                 } else if slot.chromeProfile == "web" {
                     r = try await WebSession.shared.read(accountID: slot.id, kind: slot.kind)
+                } else if slot.kind == .flow {
+                    r = try await Providers.flowSafari()
                 } else if let src = BrowserSource.parse(slot.chromeProfile) {
                     // Navegador do usuário, já logado: lê o COOKIE de sessão e chama a API
                     // por HTTP em segundo plano. Nada abre na tela (Safari exige Acesso Total ao Disco).
                     switch slot.kind {
                     case .cursor: r = try await Providers.cursorBrowser(source: src)
-                    case .grok:   r = try await Providers.grokBrowser(source: src)
+                    case .grok:   r = try await Providers.grokBot()
                     default:      r = try await Providers.claudeBrowser(source: src)
                     }
                 } else {

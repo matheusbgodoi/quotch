@@ -16,11 +16,11 @@ enum NQSettings {
     static let authorLink: String? = "https://www.linkedin.com/in/matheusgodoi-engbio/"
 
     static var version: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.1"
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.4"
     }
 
     static let emptyTitle = "Connect an assistant to get started"
-    static let emptyBody = "Quotch reads usage from tools already signed in on this Mac — it never asks for your password. Install and sign in to any of Claude Code (the terminal tool, not the Claude app), Cursor, Codex or Antigravity, and its ring appears in the notch."
+    static let emptyBody = "Quotch reads usage from tools already signed in on this Mac — it never asks for your password. Install and sign in to any of Claude Code (the terminal tool, not the Claude app), Cursor, Codex, Antigravity or Grok Bot, and its ring appears in the notch."
     static let emptyNote = "macOS will ask once for permission to read Claude Code's and Antigravity's saved logins. Choose Always Allow — plain Allow makes it ask again every time."
 
     static let reorderHelp = "Drag a ring to reorder it; the notch follows."
@@ -146,7 +146,7 @@ struct IntegrationsSection: View {
                 Toggle("Allow Keychain access (Claude Code, Antigravity)", isOn: Binding(
                     get: { store.config.readClaudeKeychain },
                     set: { store.config.readClaudeKeychain = $0 }))
-                Text("Only these two tools keep their login in the macOS Keychain, so macOS asks once — choose Always Allow. Codex and Cursor keep theirs in files and need no permission.")
+                Text("These integrations keep their login in the macOS Keychain, so macOS asks once — choose Always Allow. Grok Bot has its own one-time Keychain prompt when you add it. Codex and Cursor keep their login in files.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -301,7 +301,7 @@ struct AccountRow: View {
             HStack(spacing: 12) {
                 if acc.chromeProfile == "web" {
                     // Conta que conecta por login no app: reconectar/entrar.
-                    Button(acc.email == nil ? "Sign in…" : "Reconnect…") {
+                    Button(acc.kind == .flow || acc.email != nil ? "Reconnect…" : "Sign in…") {
                         WebSession.shared.signIn(accountID: acc.id, kind: acc.kind) { _ in
                             Task { @MainActor in
                                 if let id = await WebSession.shared.identity(accountID: acc.id, kind: acc.kind) { store.setIdentity(acc.id, id) }
@@ -419,7 +419,7 @@ struct AddRemoveBar: View {
         case .antigravity:
             Button("Antigravity (from the app)") { store.addAccount(kind: .antigravity) }
         case .grok:
-            Button("Add from a browser…") { browserPick = CaptureRequest(kind: .grok) }
+            Button("Grokbot (from the app)") { store.addAccount(kind: .grok) }
         }
     }
 
@@ -475,7 +475,7 @@ struct CaptureSheet: View {
         case .cursor:      return "Quotch reads the login of the Cursor editor, not the browser. In Cursor: Settings → Account → sign out, then sign in again."
         case .antigravity: return "Quotch reads the login of the Antigravity app. Sign out there and sign in with the other Google account."
         case .flow:        return "Flow accounts come from a browser session (planned)."
-        case .grok:        return "Quotch reads your Grok session from the browser you picked. Sign in at grok.com there; the ring follows."
+        case .grok:        return "Quotch reads the weekly limit from the Grok Bot app. Sign in there first; macOS asks once for its saved login."
         }
     }
 
